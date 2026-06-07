@@ -2838,10 +2838,18 @@ impl Bindgen for FunctionBindgen<'_> {
                 let tmp = self.tmp();
                 let result_var = format!("futureResult{tmp}");
 
-                // We only need to attempt to do an immediate lift in non-async cases,
-                // as the return of the function execution ('above' in the code)
-                // will be the future idx
-                if !self.is_async {
+                // Emit an immediate lift for sync functions, and for async
+                // *imports* that take a `future` as a parameter (the operand is
+                // one of the function parameters, i.e. the incoming future-end
+                // index). For async *exports*, the future-end index is the
+                // function's return value (`ret`) and is handled by separate
+                // return-handling code, so we must not lift it here.
+                let lift_param_in_async = self
+                    .is_async
+                    && operands
+                        .first()
+                        .is_some_and(|op| self.params.iter().any(|p| p == op));
+                if !self.is_async || lift_param_in_async {
                     // If we're dealing with a sync function, we can use the return directly
                     let arg_future_end_idx = operands
                         .first()
@@ -3123,10 +3131,18 @@ impl Bindgen for FunctionBindgen<'_> {
                 let tmp = self.tmp();
                 let result_var = format!("streamResult{tmp}");
 
-                // We only need to attempt to do an immediate lift in non-async cases,
-                // as the return of the function execution ('above' in the code)
-                // will be the stream idx
-                if !self.is_async {
+                // Emit an immediate lift for sync functions, and for async
+                // *imports* that take a `stream` as a parameter (the operand is
+                // one of the function parameters, i.e. the incoming stream-end
+                // index). For async *exports*, the stream-end index is the
+                // function's return value (`ret`) and is handled by separate
+                // return-handling code, so we must not lift it here.
+                let lift_param_in_async = self
+                    .is_async
+                    && operands
+                        .first()
+                        .is_some_and(|op| self.params.iter().any(|p| p == op));
+                if !self.is_async || lift_param_in_async {
                     // If we're dealing with a sync function, we can use the return directly
                     let arg_stream_end_idx = operands
                         .first()
