@@ -1817,3 +1817,52 @@ impl Intrinsic {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::*;
+    use crate::TranspileOpts;
+
+    /// The flat string lowering helpers call the string-encoding intrinsics
+    /// (`_utf8AllocateAndEncode` / `_utf16AllocateAndEncode`), so rendering
+    /// them must also render the encoding helpers -- even when nothing else
+    /// (e.g. a plain `Instruction::StringLower`) pulls the helpers in, as is
+    /// the case when a string is only lowered as part of a stream/future
+    /// payload.
+    #[test]
+    fn flat_string_lower_renders_encode_intrinsics() {
+        let opts = TranspileOpts::builder().name("test".into()).build();
+
+        let mut intrinsics =
+            BTreeSet::from([Intrinsic::Lower(LowerIntrinsic::LowerFlatStringUtf8)]);
+        let output = render_intrinsics(
+            RenderIntrinsicsArgs::builder()
+                .intrinsics(&mut intrinsics)
+                .transpile_opts(&opts)
+                .build(),
+        );
+        assert!(
+            output.contains("function _utf8AllocateAndEncode"),
+            "utf8 flat string lowering must render the utf8 encode intrinsic"
+        );
+
+        let mut intrinsics =
+            BTreeSet::from([Intrinsic::Lower(LowerIntrinsic::LowerFlatStringUtf16)]);
+        let output = render_intrinsics(
+            RenderIntrinsicsArgs::builder()
+                .intrinsics(&mut intrinsics)
+                .transpile_opts(&opts)
+                .build(),
+        );
+        assert!(
+            output.contains("function _utf16AllocateAndEncode"),
+            "utf16 flat string lowering must render the utf16 encode intrinsic"
+        );
+        assert!(
+            output.contains("const isLE"),
+            "the utf16 encode intrinsic requires the `isLE` helper"
+        );
+    }
+}
