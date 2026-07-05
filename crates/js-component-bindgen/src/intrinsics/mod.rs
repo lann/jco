@@ -1485,8 +1485,31 @@ pub fn render_intrinsics(args: RenderIntrinsicsArgs) -> Source {
         .intrinsics
         .contains(&Intrinsic::Lower(LowerIntrinsic::LowerFlatStringUtf8))
     {
-        args.intrinsics
-            .insert(Intrinsic::String(StringIntrinsic::GlobalTextEncoderUtf8));
+        // The lowered-string body calls the `Utf8Encode` string intrinsic
+        // (`_utf8AllocateAndEncode`) to realloc guest memory and encode the
+        // string into it. Without this the helper is referenced but never
+        // emitted, throwing a `ReferenceError` when a string is lowered as
+        // part of a stream/future/record payload.
+        args.intrinsics.extend([
+            &Intrinsic::String(StringIntrinsic::GlobalTextEncoderUtf8),
+            &Intrinsic::String(StringIntrinsic::Utf8Encode),
+        ]);
+    }
+
+    if args
+        .intrinsics
+        .contains(&Intrinsic::Lower(LowerIntrinsic::LowerFlatStringUtf16))
+    {
+        // Mirror of the UTF-8 case: the lowered-string body calls the
+        // `Utf16Encode` string intrinsic (`_utf16AllocateAndEncode`), which in
+        // turn relies on `IsLE`. Emit both so the helpers are defined.
+        //
+        // NOTE: this must be done explicitly here since the generic
+        // `Utf16Encode` -> `IsLE` dependency expansion has already run.
+        args.intrinsics.extend([
+            &Intrinsic::String(StringIntrinsic::Utf16Encode),
+            &Intrinsic::IsLE,
+        ]);
     }
 
     if args
