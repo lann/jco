@@ -5,69 +5,76 @@ import { suite, test, assert } from 'vitest';
 import { setupAsyncTest } from '../helpers.js';
 import { P3_COMPONENT_FIXTURES_DIR } from '../common.js';
 
-// Regression tests for the return status of async-lowered host imports that
-// resolve before the lowered call returns ("fast" imports).
+// Regression tests for async-lowered host imports that resolve before the
+// lowered call returns ("fast" imports), and for the width of 8-bit result
+// lowerings.
 //
-// An async-lowered import *may* return eagerly with status RETURNED (2) and
-// no subtask handle, per the Component Model async import ABI. However, for
-// result-bearing imports the eager return has been observed to corrupt guest
-// (e.g. Rust wit-bindgen) state under concurrent in-flight imports: the guest
-// releases its params/results storage as soon as it observes the eager
-// RETURNED, earlier than the event-path lifecycle the rest of the generated
-// runtime machinery assumes. Result-bearing imports must therefore report
-// STARTED with a subtask handle and deliver RETURNED through the standard
-// waitable-set event path.
+// Per the Component Model async import ABI (canon_lower), a fast import may
+// return eagerly with status RETURNED (2) and no subtask handle -- in which
+// case its results must already be written -- or report STARTED (1) with a
+// subtask handle and deliver RETURNED through the standard waitable-set event
+// path. The fixture verifies whichever path is taken end-to-end from raw core
+// wasm and reports a diagnostic code via task.return (0 = eager path OK,
+// 1 = event path OK; see component.wat for the full code legend).
 //
-// The fixture component checks the packed status codes from raw core wasm and
-// reports a diagnostic code via task.return; see component.wat for the code
-// legend.
-suite('Async host import eager-return status (WASI P3)', () => {
+// The u8-result check additionally surrounds its 1-byte result slot with
+// canary bytes: the metadata-driven `_lowerFlatU8`/`_lowerFlatS8`/
+// `_lowerFlatBool` intrinsics used to write a full 32 bits per 8-bit value,
+// spilling up to 3 bytes past result slots and list allocations and poisoning
+// adjacent dlmalloc chunk metadata in the guest -- the root cause of
+// STALE-SUBTASK-EVENT-GUEST-TRAP (delayed heap corruption: freed-funcref
+// traps at waker dispatch, dealloc aborts, and stale-looking subtask events).
+suite('Async host import fast-return handling (WASI P3)', () => {
     const componentName = 'async-import-eager-return';
     const componentPath = join(P3_COMPONENT_FIXTURES_DIR, componentName, 'component.wasm');
 
-    test('result-bearing fast import takes the event path (STARTED + SUBTASK/RETURNED event)', async () => {
+    const imports = {
+        'fast-no-result': { default: async () => {} },
+        'fast-with-result': { default: async () => 0xf00d },
+        'fast-with-u8-result': { default: async () => 0x5a },
+    };
+
+    test('u8 result lowering writes exactly one byte (canary check)', async () => {
         const { instance, cleanup } = await setupAsyncTest({
-            component: {
-                name: componentName,
-                path: componentPath,
-                imports: {
-                    'fast-no-result': { default: async () => {} },
-                    'fast-with-result': { default: async () => 0xf00d },
-                },
-            },
+            component: { name: componentName, path: componentPath, imports },
         });
 
-        const code = await instance.checkWithResult();
+        const code = await instance.checkU8Result();
         assert.notStrictEqual(
             code,
-            2,
-            'regression: result-bearing fast import returned eagerly (RETURNED with no subtask handle)',
+            9,
+            'regression: 8-bit result lowering clobbered canary bytes adjacent to the result slot',
         );
-        assert.strictEqual(
+        assert.include(
+            [0, 1],
             code,
-            0,
-            `guest-side event-path lifecycle check failed with diagnostic code [${code}] (see component.wat)`,
+            `guest-side u8-result check failed with diagnostic code [${code}] (see component.wat)`,
         );
 
         await cleanup();
     });
 
-    test('result-less fast import may return eagerly, and never exposes a handle when it does', async () => {
+    test('fast result-bearing import completes with results intact (eager or event path)', async () => {
         const { instance, cleanup } = await setupAsyncTest({
-            component: {
-                name: componentName,
-                path: componentPath,
-                imports: {
-                    'fast-no-result': { default: async () => {} },
-                    'fast-with-result': { default: async () => 0xf00d },
-                },
-            },
+            component: { name: componentName, path: componentPath, imports },
+        });
+
+        const code = await instance.checkWithResult();
+        assert.include(
+            [0, 1],
+            code,
+            `guest-side lifecycle check failed with diagnostic code [${code}] (see component.wat)`,
+        );
+
+        await cleanup();
+    });
+
+    test('fast result-less import completes, exposing no handle when eager', async () => {
+        const { instance, cleanup } = await setupAsyncTest({
+            component: { name: componentName, path: componentPath, imports },
         });
 
         const code = await instance.checkNoResult();
-        // 0 = eager RETURNED (expected for a fast import), 1 = event path
-        // (allowed: eagerness depends on host timing). Anything else is a
-        // guest-side check failure; see component.wat for the code legend.
         assert.include(
             [0, 1],
             code,

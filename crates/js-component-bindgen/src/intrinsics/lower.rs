@@ -269,7 +269,7 @@ impl LowerIntrinsic {
                         }}
 
                         {require_valid_numeric_primitive_fn}.bind('bool', ctx.vals[0]);
-                        new DataView(ctx.memory.buffer).setUint32(ctx.storagePtr, ctx.vals[0], true);
+                        new DataView(ctx.memory.buffer).setUint8(ctx.storagePtr, ctx.vals[0], true);
 
                         ctx.storagePtr += 1;
                     }}
@@ -290,7 +290,7 @@ impl LowerIntrinsic {
                         if (!ctx.memory) {{ throw new Error("missing memory for lower"); }}
 
                         {require_valid_numeric_primitive_fn}.bind('s8', ctx.vals[0]);
-                        new DataView(ctx.memory.buffer).setInt32(ctx.storagePtr, ctx.vals[0], true);
+                        new DataView(ctx.memory.buffer).setInt8(ctx.storagePtr, ctx.vals[0], true);
 
                         ctx.storagePtr += 1;
                     }}
@@ -314,7 +314,7 @@ impl LowerIntrinsic {
                         {require_valid_numeric_primitive_fn}.bind('u8', ctx.vals[0]);
 
                         if (!ctx.memory) {{ throw new Error("missing memory for lower"); }}
-                        new DataView(ctx.memory.buffer).setUint32(ctx.storagePtr, ctx.vals[0], true);
+                        new DataView(ctx.memory.buffer).setUint8(ctx.storagePtr, ctx.vals[0], true);
 
                         ctx.storagePtr += 1;
                     }}
@@ -926,9 +926,9 @@ impl LowerIntrinsic {
                             if (intSizeBytes === 1) {{
                                 dv.setUint8(ctx.storagePtr, flagValue);
                             }} else if (intSizeBytes === 2) {{
-                                dv.setUint16(ctx.storagePtr, flagValue);
+                                dv.setUint16(ctx.storagePtr, flagValue, true);
                             }} else if (intSizeBytes === 4) {{
-                                dv.setUint32(ctx.storagePtr, flagValue);
+                                dv.setUint32(ctx.storagePtr, flagValue, true);
                             }} else {{
                                 throw new Error(`unrecognized flag size [${{intSizeBytes}} bytes]`);
                             }}

@@ -2109,7 +2109,6 @@ impl AsyncTaskIntrinsic {
                 let async_event_code_enum = Intrinsic::AsyncEventCodeEnum.name();
                 let get_global_current_task_meta_fn = Intrinsic::GetGlobalCurrentTaskMetaFn.name();
                 let promise_with_resolvers_fn = Intrinsic::PromiseWithResolversPonyfill.name();
-                let subtask_class = Self::AsyncSubtaskClass.name();
 
                 output.push_str(&format!(
                     r#"
@@ -2275,28 +2274,21 @@ impl AsyncTaskIntrinsic {
 
                         return new Promise((resolve, reject) => {{
                             setTimeout(() => {{
-                                let subtaskState = subtask.getStateNumber();
+                                const subtaskState = subtask.getStateNumber();
                                 if (subtaskState < 0 || subtaskState >= 2**4) {{
                                     // throw new Error('invalid subtask state, out of valid range');
                                     reject(new Error('invalid subtask state, out of valid range'));
                                 }}
-                                // An async-lowered import whose callee resolved synchronously *may*
-                                // return [Subtask.State.RETURNED] eagerly, with no subtask handle
-                                // exposed to the guest.
-                                //
-                                // We only do so for imports without a result pointer: for
-                                // result-bearing imports the eager return has been observed to
-                                // corrupt guest (e.g. Rust wit-bindgen) heap state under
-                                // concurrent in-flight imports -- the guest releases its
-                                // params/results storage as soon as it observes the eager
-                                // RETURNED, earlier than the event-path lifecycle the rest of
-                                // this machinery assumes (see STALE-SUBTASK-EVENT-GUEST-TRAP).
-                                // Result-bearing imports instead report STARTED and deliver
-                                // RETURNED through the standard waitable-set event path.
-                                if (subtask.isReturned() && !hasResultPointer) {{
+                                // An async-lowered import whose callee resolved synchronously
+                                // returns [Subtask.State.RETURNED] eagerly: no subtask handle is
+                                // exposed to the guest, which may immediately consume the results
+                                // and release its params/results storage (per the Canonical ABI's
+                                // canon_lower: "the RETURNED code is eagerly returned ... without
+                                // needing to add a Subtask to the ... handles table").
+                                if (subtask.isReturned()) {{
                                     // Consume the pending event queued by the onProgress handler
-                                    // above; the resolve delivery it performs (or that we perform
-                                    // manually below) replaces event-path delivery.
+                                    // above: the eager return replaces event-path delivery (the
+                                    // reference implementation never queues an event in this case).
                                     if (subtask.hasPendingEvent()) {{ subtask.getPendingEvent(); }}
                                     if (!subtask.resolveDelivered()) {{
                                         subtask.deliverResolve();
@@ -2308,12 +2300,6 @@ impl AsyncTaskIntrinsic {
                                     }}
                                     resolve(subtaskState);
                                     return;
-                                }}
-                                if (subtask.isReturned()) {{
-                                    // Resolved before the lowered call returned: report the last
-                                    // pre-resolve state; the pending RETURNED event flows through
-                                    // the standard waitable-set delivery path.
-                                    subtaskState = {subtask_class}.State.STARTED;
                                 }}
                                 resolve(Number(subtask.waitableRep()) << 4 | subtaskState);
                             }}, 0);
