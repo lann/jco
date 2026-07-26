@@ -269,6 +269,8 @@ impl WaitableIntrinsic {
                 let debug_log_fn = Intrinsic::DebugLog.name();
                 let waitable_class = Self::WaitableClass.name();
                 let promise_with_resolvers_fn = Intrinsic::PromiseWithResolversPonyfill.name();
+                let get_or_create_async_state_fn =
+                    Intrinsic::Component(ComponentIntrinsic::GetOrCreateAsyncState).name();
 
                 output.push_str(&format!(
                     r#"
@@ -334,6 +336,10 @@ impl WaitableIntrinsic {
                                 inSet: this.#waitableSet,
                             }});
                             this.#pendingEventFn = fn;
+                            // A newly-set pending event may unblock a task suspended on this
+                            // waitable (directly or via a waitable set); resume it promptly
+                            // rather than waiting for the next timer tick.
+                            {get_or_create_async_state_fn}(this.#componentIdx).poke();
                         }}
 
                         getPendingEvent() {{

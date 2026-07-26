@@ -2072,6 +2072,12 @@ impl AsyncTaskIntrinsic {
                                 }},
                                 err,
                             }});
+                            // A trap (or any other error) inside the driver loop would otherwise
+                            // leave the task's completion promise unsettled forever, presenting to
+                            // the embedder as a silent hang. Reject the task so in-flight export
+                            // promises settle with the underlying error.
+                            task.setErrored(err);
+                            task.reject(err);
                         }}
                     }}
                 "#,
@@ -2103,6 +2109,7 @@ impl AsyncTaskIntrinsic {
                 let async_event_code_enum = Intrinsic::AsyncEventCodeEnum.name();
                 let get_global_current_task_meta_fn = Intrinsic::GetGlobalCurrentTaskMetaFn.name();
                 let promise_with_resolvers_fn = Intrinsic::PromiseWithResolversPonyfill.name();
+                let subtask_class = Self::AsyncSubtaskClass.name();
 
                 output.push_str(&format!(
                     r#"
@@ -2268,28 +2275,47 @@ impl AsyncTaskIntrinsic {
 
                         return new Promise((resolve, reject) => {{
                             setTimeout(() => {{
-                                const subtaskState = subtask.getStateNumber();
+                                let subtaskState = subtask.getStateNumber();
                                 if (subtaskState < 0 || subtaskState >= 2**4) {{
                                     // throw new Error('invalid subtask state, out of valid range');
                                     reject(new Error('invalid subtask state, out of valid range'));
                                 }}
-                                let res;
-                                // An async-lowered import whose callee resolved synchronously returns
-                                // [Subtask.State.RETURNED] only an no subtask handle is exposed.
-                                if (subtask.isReturned()) {{
+                                // An async-lowered import whose callee resolved synchronously *may*
+                                // return [Subtask.State.RETURNED] eagerly, with no subtask handle
+                                // exposed to the guest.
+                                //
+                                // We only do so for imports without a result pointer: for
+                                // result-bearing imports the eager return has been observed to
+                                // corrupt guest (e.g. Rust wit-bindgen) heap state under
+                                // concurrent in-flight imports -- the guest releases its
+                                // params/results storage as soon as it observes the eager
+                                // RETURNED, earlier than the event-path lifecycle the rest of
+                                // this machinery assumes (see STALE-SUBTASK-EVENT-GUEST-TRAP).
+                                // Result-bearing imports instead report STARTED and deliver
+                                // RETURNED through the standard waitable-set event path.
+                                if (subtask.isReturned() && !hasResultPointer) {{
+                                    // Consume the pending event queued by the onProgress handler
+                                    // above; the resolve delivery it performs (or that we perform
+                                    // manually below) replaces event-path delivery.
+                                    if (subtask.hasPendingEvent()) {{ subtask.getPendingEvent(); }}
                                     if (!subtask.resolveDelivered()) {{
                                         subtask.deliverResolve();
                                     }}
                                     const removed = cstate.handles.remove(subtask.waitableRep());
                                     if (removed !== subtask) {{
-                                        throw new Error('subtask handle cleanup removed unexpected entry');
                                         reject(new Error('subtask handle cleanup removed unexpected entry'));
+                                        return;
                                     }}
-                                    res = subtaskState;
-                                }} else {{
-                                    res = Number(subtask.waitableRep()) << 4 | subtaskState;
+                                    resolve(subtaskState);
+                                    return;
                                 }}
-                                    resolve(res);
+                                if (subtask.isReturned()) {{
+                                    // Resolved before the lowered call returned: report the last
+                                    // pre-resolve state; the pending RETURNED event flows through
+                                    // the standard waitable-set delivery path.
+                                    subtaskState = {subtask_class}.State.STARTED;
+                                }}
+                                resolve(Number(subtask.waitableRep()) << 4 | subtaskState);
                             }}, 0);
                         }});
                     }}

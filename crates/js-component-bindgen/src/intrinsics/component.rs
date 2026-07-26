@@ -159,6 +159,7 @@ impl ComponentIntrinsic {
 
                         #tickLoop = null;
                         #tickLoopInterval = null;
+                        #pokeQueued = false;
 
                         #onExclusiveReleaseHandlers = [];
 
@@ -467,6 +468,27 @@ impl ComponentIntrinsic {
                                 }}
                                 this.#tickLoop = null;
                             }}, 10);
+                        }}
+
+                        // Schedule an immediate tick on a fresh macrotask, coalescing
+                        // concurrent pokes.
+                        //
+                        // The tick loop above polls suspended tasks' ready functions on a
+                        // timer; state transitions that are known to unblock suspended tasks
+                        // (e.g. a pending event being set on a waitable, the exclusive lock
+                        // being released) use this to resume those tasks without waiting for
+                        // the next timer tick.
+                        //
+                        // NOTE: this must be a macrotask (setTimeout), not a microtask:
+                        // resuming a JSPI-suspended task requires a clean stack, and a
+                        // microtask may run while wasm frames are still live.
+                        poke() {{
+                            if (this.#pokeQueued) {{ return; }}
+                            this.#pokeQueued = true;
+                            setTimeout(() => {{
+                                this.#pokeQueued = false;
+                                this.tick();
+                            }}, 0);
                         }}
 
                         tick() {{
