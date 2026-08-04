@@ -343,10 +343,14 @@ impl HostIntrinsic {
                             throw new Error(`unsupported result count [${{ resultCount }}]`);
                         }}
 
+                        // NOTE: `params` are the *caller's* lowered core args captured during
+                        // PrepareCall, while `paramCount` describes the *callee's* lifted core
+                        // signature. The two intentionally differ whenever the caller spilled
+                        // its arguments to memory (async lowers pass a single pointer for
+                        // functions with more than MAX_FLAT_ASYNC_PARAMS flat params): the
+                        // fused [async-start] adapter (`startFn`, invoked via
+                        // `subtask.onStart()` below) converts the former into the latter.
                         const params = preparedTask.getCalleeParams();
-                        if (paramCount !== params.length) {{
-                            throw new Error(`unexpected callee param count [${{ params.length }}], {async_start_call_fn} invocation expected [${{ paramCount }}]`);
-                        }}
 
                         const callerComponentState = {get_or_create_async_state_fn}(subtask.componentIdx());
 
@@ -463,7 +467,10 @@ impl HostIntrinsic {
                             }});
 
                             let startRes = subtask.onStart({{ startFnParams: params }});
-                            startRes = Array.isArray(startRes) ? startRes : [startRes];
+                            startRes = startRes === undefined ? [] : Array.isArray(startRes) ? startRes : [startRes];
+                            if (startRes.length !== paramCount) {{
+                                throw new Error(`unexpected callee param count [${{ startRes.length }}] after start fn, {async_start_call_fn} invocation expected [${{ paramCount }}]`);
+                            }}
 
                             if (calleeComponentState.isExclusivelyLocked()) {{
                                 {debug_log_fn}('[{async_start_call_fn}()] during continuation callee is exclusively locked, suspending...', {{
