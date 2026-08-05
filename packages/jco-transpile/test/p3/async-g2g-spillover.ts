@@ -25,8 +25,12 @@ suite('guest->guest async calls with spilled params', () => {
             component: {
                 name: 'async-g2g-spillover',
                 path: componentPath,
-                imports: { ...new WASIShim().getImportObject() },
+                imports: {
+                    ...new WASIShim().getImportObject(),
+                    pause: { default: () => Promise.resolve() },
+                },
             },
+            jco: { transpile: { extraArgs: { asyncImports: ['pause'] } } },
         });
         try {
             assert.instanceOf(instance.runAdd5, AsyncFunction);
@@ -45,12 +49,61 @@ suite('guest->guest async calls with spilled params', () => {
             component: {
                 name: 'async-g2g-spillover',
                 path: componentPath,
-                imports: { ...new WASIShim().getImportObject() },
+                imports: {
+                    ...new WASIShim().getImportObject(),
+                    pause: { default: () => Promise.resolve() },
+                },
             },
+            jco: { transpile: { extraArgs: { asyncImports: ['pause'] } } },
         });
         try {
             assert.instanceOf(instance.runConcat3, AsyncFunction);
             assert.strictEqual(await instance.runConcat3('héllo ', 'wörld ', 7), 'héllo wörld 7');
+        } finally {
+            await cleanup();
+        }
+    });
+
+    // The callee parks (awaits a host import) before returning, so its
+    // result is delivered by the guest->guest driver loop rather than the
+    // callee's initial synchronous slice. Previously the driver-loop call in
+    // _asyncStartCall referenced undefined `resolve`/`reject` identifiers;
+    // the resulting ReferenceError was swallowed by the surrounding catch,
+    // so eagerly-resolving callees appeared to work while any callee that
+    // parked never resumed.
+    test('multi-slice callee (parks on a host import) through a composition', async () => {
+        const componentPath = await composeCallerCallee({
+            callerPath: join(LOCAL_TEST_COMPONENTS_DIR, 'async-g2g-spillover-caller.wasm'),
+            calleePath: join(LOCAL_TEST_COMPONENTS_DIR, 'async-g2g-spillover-callee.wasm'),
+        });
+        const { instance, cleanup } = await setupAsyncTest({
+            component: {
+                name: 'async-g2g-spillover',
+                path: componentPath,
+                imports: {
+                    ...new WASIShim().getImportObject(),
+                    pause: {
+                        default: () => new Promise((resolve) => setTimeout(resolve, 10)),
+                    },
+                },
+            },
+            jco: {
+                transpile: {
+                    extraArgs: {
+                        asyncImports: ['pause'],
+                    },
+                },
+            },
+        });
+        try {
+            assert.instanceOf(instance.runAdd5Parked, AsyncFunction);
+            const result = await Promise.race([
+                instance.runAdd5Parked(1, 2, 3, 4, 5),
+                new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error('timeout: parked callee never resumed')), 15_000),
+                ),
+            ]);
+            assert.strictEqual(result, 15);
         } finally {
             await cleanup();
         }
