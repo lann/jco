@@ -827,6 +827,7 @@ interface result-scalars-api {
 
 world async-result-scalars {
   export result-scalars-api;
+}
 
 // Guest->guest async calls whose flat param count exceeds
 // MAX_FLAT_ASYNC_PARAMS (4), forcing the caller side to spill params to
@@ -844,6 +845,7 @@ world async-g2g-spillover-caller {
   import spillover-g2g-api;
   export run-add5: async func(p1: u32, p2: u32, p3: u32, p4: u32, p5: u32) -> u32;
   export run-concat3: async func(a: string, b: string, c: u8) -> string;
+}
 
 // wit-bindgen inter-task-wakeup (guest-internal unit stream): one export
 // spawns a detached pump task that parks on a host import; a second export
