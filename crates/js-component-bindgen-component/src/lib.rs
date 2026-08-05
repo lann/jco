@@ -58,6 +58,7 @@ impl bindings::Guest for JsComponentBindgenComponent {
             .maybe_instantiation_mode(options.instantiation.map(Into::into))
             .maybe_map(options.map.map(|map| map.into_iter().collect()))
             .nodejs_compat_disabled(options.no_nodejs_compat.unwrap_or(false))
+            .no_eager_subtask_return(options.no_eager_subtask_return.unwrap_or(false))
             .base64_cutoff(options.base64_cutoff.unwrap_or(5000) as usize)
             .tla_compat(
                 options
@@ -155,6 +156,7 @@ impl bindings::Guest for JsComponentBindgenComponent {
             .name("component".into())
             .no_typescript(false)
             .nodejs_compat_disabled(false)
+            .no_eager_subtask_return(false)
             .maybe_instantiation_mode(opts.instantiation.map(Into::into))
             .maybe_map(opts.map.map(|map| map.into_iter().collect()))
             .tla_compat(opts.tla_compat.unwrap_or(false))

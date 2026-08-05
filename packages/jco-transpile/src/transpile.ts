@@ -94,6 +94,15 @@ export interface TranspilationOptions {
     /** Enable/disable NodeJS compat */
     nodejsCompat?: boolean;
 
+    /**
+     * Never answer an async-lowered import with a bare `RETURNED` status;
+     * always report `STARTED` with a subtask handle and deliver completion
+     * via the subtask event. Compatibility workaround for guests whose
+     * async-import lowering does not implement the returned-immediately
+     * case (e.g. componentize-js/StarlingMonkey).
+     */
+    noEagerSubtaskReturn?: boolean;
+
     /** Enable/disable Top Level Await ("TLA") compat */
     tlaCompat?: boolean;
 
@@ -300,6 +309,7 @@ export async function transpileBytes(
         validLiftingOptimization: opts.validLiftingOptimization ?? false,
         tracing: opts.tracing ?? false,
         noNodejsCompat: opts.nodejsCompat === false,
+        noEagerSubtaskReturn: opts.noEagerSubtaskReturn ?? false,
         noTypescript: opts.emitTypescriptDeclarations === false,
         tlaCompat: opts.tlaCompat ?? false,
         base64Cutoff: opts.js ? 0 : (opts.base64Cutoff ?? 5000),

@@ -330,7 +330,7 @@ impl AsyncTaskIntrinsic {
     }
 
     /// Render an intrinsic to a string
-    pub fn render(&self, output: &mut Source, _render_args: &RenderIntrinsicsArgs<'_>) {
+    pub fn render(&self, output: &mut Source, render_args: &RenderIntrinsicsArgs<'_>) {
         match self {
             Self::CurrentTaskMayBlock => {
                 let var_name = self.name();
@@ -2233,6 +2233,54 @@ impl AsyncTaskIntrinsic {
                 let get_global_current_task_meta_fn = Intrinsic::GetGlobalCurrentTaskMetaFn.name();
                 let promise_with_resolvers_fn = Intrinsic::PromiseWithResolversPonyfill.name();
 
+                // How to answer an async-lowered import whose callee settled before this
+                // lowering returned (i.e. `subtask.isReturned()` at decision time):
+                //
+                // - default (CABI): return a bare `RETURNED` status with no subtask handle,
+                //   consuming the parked pending event and dropping the subtask;
+                // - `no_eager_subtask_return` compat mode: report `STARTED | rep` and leave
+                //   the parked RETURNED event to flow through the normal wait path. This is
+                //   for guests whose async-import lowering does not implement the
+                //   returned-immediately case (e.g. componentize-js/StarlingMonkey, see
+                //   lann/jco#6); the guest cannot distinguish "settled just before I asked"
+                //   from "settled while waiting". NOTE: this mode breaks guests that assert
+                //   eager readiness (e.g. wit-bindgen wait-until on a passed deadline).
+                let eager_return_branch = if render_args.transpile_opts.no_eager_subtask_return {
+                    r#"
+                                    const reportedState = subtask.isReturned()
+                                        ? 1 /* Subtask.State.STARTED (compat: no eager subtask return) */
+                                        : subtaskState;
+                                    res = Number(subtask.waitableRep()) << 4 | reportedState;
+                    "#
+                } else {
+                    r#"
+                                    // An async-lowered import whose callee resolved synchronously returns
+                                    // [Subtask.State.RETURNED] only and no subtask handle is exposed.
+                                    if (subtask.isReturned()) {
+                                        // The on-progress handler parked a pending SUBTASK event on the
+                                        // waitable when the import settled. The guest never learns this
+                                        // waitable's rep (we return a bare RETURNED state), so consume the
+                                        // event now -- otherwise a stale event is left parked forever (and
+                                        // the waitable can never be dropped).
+                                        if (subtask.hasPendingEvent()) {
+                                            subtask.getPendingEvent();
+                                        }
+                                        if (!subtask.resolveDelivered()) {
+                                            subtask.deliverResolve();
+                                        }
+                                        const removed = cstate.handles.remove(subtask.waitableRep());
+                                        if (removed !== subtask) {
+                                            reject(new Error('subtask handle cleanup removed unexpected entry'));
+                                            return;
+                                        }
+                                        subtask.drop();
+                                        res = subtaskState;
+                                    } else {
+                                        res = Number(subtask.waitableRep()) << 4 | subtaskState;
+                                    }
+                    "#
+                };
+
                 output.push_str(&format!(
                     r#"
                     async function {lower_import_fn}(args) {{
@@ -2411,37 +2459,13 @@ impl AsyncTaskIntrinsic {
                                         return;
                                     }}
                                     let res;
-                                    // An async-lowered import whose callee resolved synchronously returns
-                                    // [Subtask.State.RETURNED] only and no subtask handle is exposed.
-                                    if (subtask.isReturned()) {{
-                                        // The on-progress handler parked a pending SUBTASK event on the
-                                        // waitable when the import settled. The guest never learns this
-                                        // waitable's rep (we return a bare RETURNED state), so consume the
-                                        // event now -- otherwise a stale event is left parked forever (and
-                                        // the waitable can never be dropped).
-                                        if (subtask.hasPendingEvent()) {{
-                                            subtask.getPendingEvent();
-                                        }}
-                                        if (!subtask.resolveDelivered()) {{
-                                            subtask.deliverResolve();
-                                        }}
-                                        const removed = cstate.handles.remove(subtask.waitableRep());
-                                        if (removed !== subtask) {{
-                                            reject(new Error('subtask handle cleanup removed unexpected entry'));
-                                            return;
-                                        }}
-                                        subtask.drop();
-                                        res = subtaskState;
-                                    }} else {{
-                                        res = Number(subtask.waitableRep()) << 4 | subtaskState;
-                                    }}
+                                    {eager_return_branch}
                                     {debug_log_fn}('[{lower_import_fn}()] async-lowered import return', {{
                                         fnName: importFn.fnName,
                                         componentIdx,
                                         subtaskID: subtask.id(),
                                         waitableRep: subtask.waitableRep(),
                                         subtaskState,
-                                        eagerReturn: subtask.isReturned(),
                                         packedResult: res,
                                     }});
                                     resolve(res);
