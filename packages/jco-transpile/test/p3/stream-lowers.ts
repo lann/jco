@@ -286,6 +286,20 @@ suite('stream<T> lowers', () => {
             assert.deepEqual(returnedVals, vals);
         });
 
+        // Regression test for host strings whose UTF-8 byte length differs from
+        // their code point count: the canonical length field must be the byte
+        // length (see lann/jco#4)
+        test.concurrent('string (non-ASCII)', async () => {
+            const instance = await getInstance();
+            assert.instanceOf(instance['jco:test-components/stream-lower-async'].readStreamValuesString, AsyncFunction);
+
+            const vals = ['héllo', 'öäü', '你好世界', '🦀🦀', 'mixed: é🦀好'];
+            const returnedVals = await instance['jco:test-components/stream-lower-async'].readStreamValuesString(
+                createReadableStreamFromValues(vals),
+            );
+            assert.deepEqual(returnedVals, vals);
+        });
+
         test.concurrent('record', async () => {
             const instance = await getInstance();
             assert.instanceOf(instance['jco:test-components/stream-lower-async'].readStreamValuesRecord, AsyncFunction);
