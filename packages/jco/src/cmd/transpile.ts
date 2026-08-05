@@ -18,6 +18,8 @@ export interface TranspileOpts {
     validLiftingOptimization?: boolean;
     tracing?: boolean;
     nodejsCompat?: boolean;
+    eagerSubtaskReturn?: boolean;
+    noEagerSubtaskReturn?: boolean;
     tlaCompat?: boolean;
     base64Cutoff?: number;
     js?: boolean;
@@ -82,6 +84,11 @@ function prepOpts(opts: any, program?: any) {
         if (Array.isArray(opts.map)) {
             opts.map = Object.fromEntries(opts.map.map((s: string) => s.split("=")));
         }
+    }
+
+    // commander's `--no-eager-subtask-return` surfaces as `eagerSubtaskReturn: false`
+    if (opts.eagerSubtaskReturn === false) {
+        opts.noEagerSubtaskReturn = true;
     }
 
     return opts;

@@ -82,6 +82,16 @@ pub struct TranspileOpts {
     /// Disables compatibility in Node.js without a fetch global.
     #[builder(default)]
     pub nodejs_compat_disabled: bool,
+    /// Never answer an async-lowered import with a bare `RETURNED` status,
+    /// even when the import settled before the lowering returned; report
+    /// `STARTED | rep` instead and deliver the completion via the parked
+    /// SUBTASK event. Compatibility workaround for guests whose async-import
+    /// lowering does not implement the returned-immediately case (e.g.
+    /// componentize-js/StarlingMonkey, see lann/jco#6). Note that enabling
+    /// this breaks guests that *assert* eager readiness (e.g. wit-bindgen
+    /// wait-until with an already-passed deadline).
+    #[builder(default)]
+    pub no_eager_subtask_return: bool,
     /// Set the cutoff byte size for base64 inlining core Wasm in instantiation mode
     /// (set to 0 to disable all base64 inlining)
     #[builder(default)]

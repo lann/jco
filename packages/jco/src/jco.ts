@@ -128,6 +128,10 @@ program
         "enables compatibility for JS environments without top-level await support via an async $init promise export",
     )
     .option("--no-nodejs-compat", "disables compatibility in Node.js without a fetch global")
+    .option(
+        "--no-eager-subtask-return",
+        "never answer an async-lowered import with a bare RETURNED status; compat for guests that only handle STARTED + subtask event (e.g. componentize-js)",
+    )
     .option("-M, --map <mappings...>", "specifier=./output custom mappings for the component imports")
     .option("--no-wasi-shim", "disable automatic rewriting of WASI imports to use @bytecodealliance/preview2-shim")
     .option("--stub", "generate a stub implementation from a WIT file directly")

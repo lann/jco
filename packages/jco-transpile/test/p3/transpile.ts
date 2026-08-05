@@ -121,6 +121,27 @@ suite('Transpile (WASI P3)', () => {
         });
     }
 
+    if (!env.TEST_P3_FIXTURE_TARGET || env.TEST_P3_FIXTURE_TARGET === 'p3-clocks-sleep.wasm') {
+        test('noEagerSubtaskReturn selects the compat async-import return path', async () => {
+            const componentPath = join(P3_COMPONENT_FIXTURES_DIR, 'clocks/p3-clocks-sleep.wasm');
+            const decoder = new TextDecoder();
+            const sourceOf = (files: Record<string, string | Uint8Array>) =>
+                Object.entries(files)
+                    .filter(([name]) => name.endsWith('.js'))
+                    .map(([, source]) => (typeof source === 'string' ? source : decoder.decode(source)))
+                    .join('\n');
+
+            const { files: compatFiles } = await transpile(componentPath, {
+                noEagerSubtaskReturn: true,
+                minify: false,
+            });
+            assert.include(sourceOf(compatFiles), 'compat: no eager subtask return');
+
+            const { files: defaultFiles } = await transpile(componentPath, { minify: false });
+            assert.notInclude(sourceOf(defaultFiles), 'compat: no eager subtask return');
+        });
+    }
+
     for (const componentRelPath of P3_FIXTURE_COMPONENTS) {
         const componentPath = join(P3_COMPONENT_FIXTURES_DIR, componentRelPath);
         const componentName = basename(componentPath);
