@@ -2465,8 +2465,10 @@ impl<'a> Instantiator<'a, '_> {
                               function trampoline{i} (from_ptr, len, to_ptr) {{
                                   const decoder = new TextDecoder();
                                   const content = decoder.decode(new Uint8Array(memory{from}.buffer, from_ptr, len));
-                                  const strlen = content.length
-                                  const view = new Uint16Array(memory{to}.buffer, to_ptr, strlen * 2)
+                                  const strlen = content.length;
+                                  // NOTE: the third Uint16Array argument is a length in
+                                  // *elements* (code units), not bytes
+                                  const view = new Uint16Array(memory{to}.buffer, to_ptr, strlen);
                                   for (var i = 0; i < strlen; i++) {{
                                       view[i] = content.charCodeAt(i);
                                   }}
