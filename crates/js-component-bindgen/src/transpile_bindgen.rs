@@ -1314,12 +1314,14 @@ impl<'a> Instantiator<'a, '_> {
                 let subtask_cancel_fn = self
                     .bindgen
                     .intrinsic(Intrinsic::AsyncTask(AsyncTaskIntrinsic::SubtaskCancel));
+                let suspending_wrap_fn =
+                    self.bindgen.intrinsic(Intrinsic::SuspendingImportWrapperFn);
                 // NOTE: core wasm passes the subtask handle as the remaining argument.
                 // The intrinsic is async (a sync-lowered cancel may need to block until
                 // the subtask resolves), so it must be JSPI-wrapped.
                 uwriteln!(
                     self.src.js,
-                    "const trampoline{i} = new WebAssembly.Suspending({subtask_cancel_fn}.bind(null, {instance_idx}, {async_}));\n",
+                    "const trampoline{i} = new WebAssembly.Suspending({suspending_wrap_fn}({instance_idx}, {subtask_cancel_fn}.bind(null, {instance_idx}, {async_})));\n",
                     instance_idx = instance.as_u32(),
                 );
             }
@@ -1379,16 +1381,18 @@ impl<'a> Instantiator<'a, '_> {
                 let waitable_set_wait_fn = self
                     .bindgen
                     .intrinsic(Intrinsic::Waitable(WaitableIntrinsic::WaitableSetWait));
+                let suspending_wrap_fn =
+                    self.bindgen.intrinsic(Intrinsic::SuspendingImportWrapperFn);
 
                 uwriteln!(
                     self.src.js,
                     r#"
-                    const trampoline{i} = new WebAssembly.Suspending({waitable_set_wait_fn}.bind(null, {{
+                    const trampoline{i} = new WebAssembly.Suspending({suspending_wrap_fn}({instance_idx}, {waitable_set_wait_fn}.bind(null, {{
                         componentIdx: {instance_idx},
                         isAsync: {async_},
                         memoryIdx: {memory_idx},
                         getMemoryFn: () => memory{memory_idx},
-                    }}));
+                    }})));
                     "#,
                 );
             }
@@ -1623,7 +1627,7 @@ impl<'a> Instantiator<'a, '_> {
 
                 uwriteln!(
                     self.src.js,
-                    r#"const trampoline{i} = new WebAssembly.Suspending({stream_read_fn}.bind(
+                    r#"const trampoline{i} = new WebAssembly.Suspending({suspending_wrap_fn}({component_instance_id}, {stream_read_fn}.bind(
                          null,
                          {{
                              componentIdx: {component_instance_id},
@@ -1635,8 +1639,10 @@ impl<'a> Instantiator<'a, '_> {
                              isAsync: {async_},
                              streamTableIdx: {stream_table_idx},
                          }}
-                     ));
+                     )));
                     "#,
+                    suspending_wrap_fn =
+                        self.bindgen.intrinsic(Intrinsic::SuspendingImportWrapperFn),
                 );
             }
 
@@ -1702,7 +1708,7 @@ impl<'a> Instantiator<'a, '_> {
                 uwriteln!(
                     self.src.js,
                     r#"
-                     const trampoline{i} = new WebAssembly.Suspending({stream_write_fn}.bind(
+                     const trampoline{i} = new WebAssembly.Suspending({suspending_wrap_fn}({component_instance_id}, {stream_write_fn}.bind(
                          null,
                          {{
                              componentIdx: {component_instance_id},
@@ -1714,8 +1720,10 @@ impl<'a> Instantiator<'a, '_> {
                              isAsync: {async_},
                              streamTableIdx: {stream_table_idx},
                          }}
-                     ));
+                     )));
                     "#,
+                    suspending_wrap_fn =
+                        self.bindgen.intrinsic(Intrinsic::SuspendingImportWrapperFn),
                 );
             }
 
@@ -1744,12 +1752,14 @@ impl<'a> Instantiator<'a, '_> {
                 uwriteln!(
                     self.src.js,
                     r#"
-                      const trampoline{i} = new WebAssembly.Suspending({stream_cancel_fn}.bind(null, {{
+                      const trampoline{i} = new WebAssembly.Suspending({suspending_wrap_fn}({component_idx}, {stream_cancel_fn}.bind(null, {{
                           streamTableIdx: {stream_table_idx},
                           isAsync: {async_},
                           componentIdx: {component_idx},
-                      }}));
+                      }})));
                     "#,
+                    suspending_wrap_fn =
+                        self.bindgen.intrinsic(Intrinsic::SuspendingImportWrapperFn),
                 );
             }
 
@@ -1942,7 +1952,7 @@ impl<'a> Instantiator<'a, '_> {
                 uwriteln!(
                     self.src.js,
                     r#"
-                      const trampoline{i} = new WebAssembly.Suspending({intrinsic_fn}.bind(
+                      const trampoline{i} = new WebAssembly.Suspending({suspending_wrap_fn}({component_idx}, {intrinsic_fn}.bind(
                           null,
                           {{
                               componentIdx: {component_idx},
@@ -1954,8 +1964,10 @@ impl<'a> Instantiator<'a, '_> {
                               futureTableIdx: {future_table_idx},
                               isAsync: {async_},
                           }},
-                      ));
+                      )));
                     "#,
+                    suspending_wrap_fn =
+                        self.bindgen.intrinsic(Intrinsic::SuspendingImportWrapperFn),
                 );
             }
 
@@ -1985,15 +1997,17 @@ impl<'a> Instantiator<'a, '_> {
                 uwriteln!(
                     self.src.js,
                     r#"
-                      const trampoline{i} = new WebAssembly.Suspending({future_cancel_op_fn}.bind(
+                      const trampoline{i} = new WebAssembly.Suspending({suspending_wrap_fn}({component_idx}, {future_cancel_op_fn}.bind(
                           null,
                           {{
                               futureTableIdx: {future_table_idx},
                               componentIdx: {component_idx},
                               isAsync: {async_},
                           }},
-                      ));
+                      )));
                     "#,
+                    suspending_wrap_fn =
+                        self.bindgen.intrinsic(Intrinsic::SuspendingImportWrapperFn),
                 );
             }
 
@@ -2015,14 +2029,16 @@ impl<'a> Instantiator<'a, '_> {
                 uwriteln!(
                     self.src.js,
                     r#"
-                      const trampoline{i} = new WebAssembly.Suspending({future_drop_op_fn}.bind(
+                      const trampoline{i} = new WebAssembly.Suspending({suspending_wrap_fn}({component_idx}, {future_drop_op_fn}.bind(
                           null,
                           {{
                               futureTableIdx: {future_table_idx},
                               componentIdx: {component_idx},
                           }},
-                      ));
-                "#
+                      )));
+                "#,
+                    suspending_wrap_fn =
+                        self.bindgen.intrinsic(Intrinsic::SuspendingImportWrapperFn),
                 );
             }
 
@@ -2393,17 +2409,19 @@ impl<'a> Instantiator<'a, '_> {
 
                 // NOTE: For Trampoline::LowerImport, the trampoline index is actually already defined,
                 // but we *redefine* it to call the lower import function first.
+                let suspending_wrap_fn =
+                    self.bindgen.intrinsic(Intrinsic::SuspendingImportWrapperFn);
                 if is_async || func_ty_async {
                     uwriteln!(
                         self.src.js,
-                        "let trampoline{i} = new WebAssembly.Suspending({call});"
+                        "let trampoline{i} = new WebAssembly.Suspending({suspending_wrap_fn}({component_idx}, {call}));"
                     );
                 } else {
                     // TODO(breaking): once manually specifying async imports is removed,
                     // we can avoid the second check below.
                     uwriteln!(
                         self.src.js,
-                        "let trampoline{i} = _trampoline{i}.manuallyAsync ? new WebAssembly.Suspending({call}) : {call};"
+                        "let trampoline{i} = _trampoline{i}.manuallyAsync ? new WebAssembly.Suspending({suspending_wrap_fn}({component_idx}, {call})) : {call};"
                     );
                 }
             }
@@ -2755,14 +2773,16 @@ impl<'a> Instantiator<'a, '_> {
                 let yield_fn = self
                     .bindgen
                     .intrinsic(Intrinsic::AsyncTask(AsyncTaskIntrinsic::Yield));
+                let suspending_wrap_fn =
+                    self.bindgen.intrinsic(Intrinsic::SuspendingImportWrapperFn);
                 let component_instance_idx = instance.as_u32();
                 uwriteln!(
                     self.src.js,
                     r#"
-                      const trampoline{i} = new WebAssembly.Suspending({yield_fn}.bind(null, {{
+                      const trampoline{i} = new WebAssembly.Suspending({suspending_wrap_fn}({component_instance_idx}, {yield_fn}.bind(null, {{
                           isCancellable: {cancellable},
                           componentIdx: {component_instance_idx},
-                      }}));
+                      }})));
                     "#,
                 );
             }
