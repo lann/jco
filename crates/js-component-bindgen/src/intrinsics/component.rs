@@ -353,7 +353,17 @@ impl ComponentIntrinsic {
                             const placeholder = {{
                                 completed: false,
                                 task,
-                                promise: task.exitPromise().then(() => {{
+                                // A task frees the slot when it exits *or*
+                                // first parks (WAIT/YIELD after its initial
+                                // slice): long-lived tasks (e.g. one holding
+                                // in-flight imports across export calls) must
+                                // not serialize the whole component behind
+                                // their lifetime. Slice-level exclusivity is
+                                // the exclusive lock's job, not this queue's.
+                                promise: Promise.race([
+                                    task.exitPromise(),
+                                    task.firstParkPromise(),
+                                ]).then(() => {{
                                     placeholder.completed = true;
                                 }}),
                             }};

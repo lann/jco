@@ -886,6 +886,9 @@ impl AsyncTaskIntrinsic {
                         #exitPromise = null;
                         #onExitHandlers = [];
 
+                        #firstParkPromise = null;
+                        #resolveFirstParkPromise = null;
+
                         #memoryIdx = null;
                         #memory = null;
 
@@ -974,6 +977,13 @@ impl AsyncTaskIntrinsic {
                                resolveExitPromise();
                            }});
 
+                           const {{
+                               promise: firstParkPromise,
+                               resolve: resolveFirstParkPromise,
+                           }} = {promise_with_resolvers_fn}();
+                           this.#firstParkPromise = firstParkPromise;
+                           this.#resolveFirstParkPromise = resolveFirstParkPromise;
+
                            if (opts.callbackFn) {{ this.#callbackFn = opts.callbackFn; }}
                            if (opts.callbackFnName) {{ this.#callbackFnName = opts.callbackFnName; }}
 
@@ -994,6 +1004,11 @@ impl AsyncTaskIntrinsic {
 
                         completionPromise() {{ return this.#completionPromise; }}
                         exitPromise() {{ return this.#exitPromise; }}
+
+                        /// Resolves when this task first leaves its initial
+                        /// synchronous slice (first WAIT/YIELD), or exits.
+                        firstParkPromise() {{ return this.#firstParkPromise; }}
+                        markParked() {{ this.#resolveFirstParkPromise(); }}
 
                         isAsync() {{ return this.#isAsync; }}
                         isSync() {{ return !this.isAsync(); }}
@@ -2069,7 +2084,13 @@ impl AsyncTaskIntrinsic {
                         let wset;
                         try {{
                             while (true) {{
-                                if (callbackCode !== 0) {{ componentState.exclusiveRelease(); }}
+                                if (callbackCode !== 0) {{
+                                    componentState.exclusiveRelease();
+                                    // The task's initial slice is over: the
+                                    // component's execution-slot queue may
+                                    // admit the next task.
+                                    task.markParked();
+                                }}
 
                                 switch (callbackCode) {{
                                     case 0: // EXIT
