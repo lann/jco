@@ -70,4 +70,51 @@ suite('guest inter-task wakeup', () => {
             await cleanup();
         }
     }, 60_000);
+
+    // Regression test for the component execution-slot queue: a task that
+    // has parked (WAIT after its initial slice) but not exited must not
+    // block later tasks from entering the instance. Previously the queue
+    // gated the next task's enter() on the previous task's *exit*, so a
+    // parked-forever task serialized (deadlocked) every subsequent export
+    // call (see lann/jco#11).
+    test('a parked task does not serialize later export calls', async () => {
+        let resolveTick;
+        const tickPromise = new Promise((resolve) => {
+            resolveTick = resolve;
+        });
+        const { instance, cleanup } = await setupAsyncTest({
+            asyncMode: 'jspi',
+            component: {
+                name: 'inter-task-wakeup',
+                path: join(LOCAL_TEST_COMPONENTS_DIR, 'inter-task-wakeup.wasm'),
+                imports: {
+                    ...new WASIShim().getImportObject(),
+                    'wakeup-tick': { default: () => tickPromise },
+                },
+            },
+            jco: {
+                transpile: {
+                    extraArgs: {
+                        asyncImports: ['wakeup-tick'],
+                    },
+                },
+            },
+        });
+        try {
+            // Park the first task indefinitely: nothing will fire the Rust
+            // waker until the pump (started below) runs
+            const wakePromise = instance.awaitWake();
+            await new Promise((r) => setTimeout(r, 250));
+
+            // The second export call must be admitted while the first task
+            // is parked (it is what eventually wakes the first task)
+            await withTimeout(instance.startPump(), 15_000, 'startPump (parked-task serialization)');
+
+            resolveTick(42);
+            assert.strictEqual(await withTimeout(wakePromise, 15_000, 'awaitWake'), 42);
+        } finally {
+            await cleanup();
+        }
+    }, 60_000);
 });
+
