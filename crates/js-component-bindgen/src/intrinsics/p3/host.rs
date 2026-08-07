@@ -608,13 +608,163 @@ impl HostIntrinsic {
             Self::SyncStartCall => {
                 let debug_log_fn = Intrinsic::DebugLog.name();
                 let sync_start_call_fn = Self::SyncStartCall.name();
+                let get_or_create_async_state_fn =
+                    Intrinsic::Component(ComponentIntrinsic::GetOrCreateAsyncState).name();
+                let async_driver_loop_fn =
+                    Intrinsic::AsyncTask(AsyncTaskIntrinsic::DriverLoop).name();
+                let current_component_idx_globals =
+                    AsyncTaskIntrinsic::GlobalAsyncCurrentComponentIdxs.name();
+                let get_current_task_fn =
+                    Intrinsic::AsyncTask(AsyncTaskIntrinsic::GetCurrentTask).name();
+                let with_global_current_task_meta_async_fn =
+                    Intrinsic::WithGlobalCurrentTaskMetaFnAsync.name();
+                let get_global_current_task_meta_fn = Intrinsic::GetGlobalCurrentTaskMetaFn.name();
+
+                // The blocking start-call for a *sync-lowered* import of an
+                // *async-lifted* export (wasmtime-environ's
+                // `compile_sync_to_async_adapter`): runs immediately after
+                // `_prepareCall` in the same fused-adapter frame, starts the
+                // prepared callee task, drives it (callback protocol) until it
+                // resolves via `task.return`, and returns the sync lowering's
+                // flat result (produced by the fused `[return-call]` helper,
+                // stashed by the `taskReturn` intrinsic). Runs on the caller's
+                // suspended JSPI stack (the trampoline is `Suspending`-wrapped),
+                // which is what makes the call block.
+                //
+                // Unlike `_asyncStartCall`, callee failures propagate as an
+                // exception (trapping the caller) rather than being recorded
+                // silently: a trapped callee traps a sync caller.
                 output.push_str(&format!(
-                    "
-                    function {sync_start_call_fn}(callbackIdx) {{
-                        {debug_log_fn}('[{sync_start_call_fn}()] args', {{ callbackIdx }});
-                        throw new Error('synchronous start call not implemented!');
+                    r#"
+                    async function {sync_start_call_fn}(args, callee, paramCount) {{
+                        const componentIdx = {current_component_idx_globals}.at(-1);
+
+                        const globalTaskMeta = {get_global_current_task_meta_fn}(componentIdx);
+                        if (!globalTaskMeta) {{ throw new Error('missing global current task meta during sync start call'); }}
+                        const taskID = globalTaskMeta.taskID;
+
+                        {debug_log_fn}('[{sync_start_call_fn}()] args', {{ args, paramCount, componentIdx }});
+                        const {{ getCallbackFn, callbackIdx }} = args;
+
+                        const preparedTaskMeta = {get_current_task_fn}(componentIdx, taskID);
+                        if (!preparedTaskMeta) {{ throw new Error('unexpectedly missing current (prepared) task'); }}
+
+                        const preparedTask = preparedTaskMeta.task;
+                        if (!preparedTask) {{ throw new Error('unexpectedly missing current (prepared) task'); }}
+                        if (!preparedTask.subtaskMeta) {{ throw new Error('missing subtask meta from prepare'); }}
+
+                        const {{ subtask, calleeComponentIdx }} = preparedTask.subtaskMeta;
+                        if (!subtask) {{ throw new Error('missing subtask from prepare during sync start call'); }}
+                        if (calleeComponentIdx !== preparedTask.componentIdx()) {{
+                            throw new Error(`meta callee idx [${{calleeComponentIdx}}] != current task idx [${{preparedTask.componentIdx()}}] during sync start call`);
+                        }}
+
+                        const callbackFn = getCallbackFn();
+                        preparedTask.setCallbackFn(callbackFn, 'callback_' + callbackIdx);
+
+                        // NOTE: `params` are the caller's lowered core args captured during
+                        // PrepareCall; the fused [sync-start] helper (`startFn`, invoked via
+                        // `subtask.onStart()` below) converts them into the callee's lifted
+                        // core signature (`paramCount`).
+                        const params = preparedTask.getCalleeParams();
+
+                        const calleeComponentState = {get_or_create_async_state_fn}(preparedTask.componentIdx());
+
+                        // For fused guest->guest calls the [return-call] helper performs the
+                        // result copy/lower; it is invoked by the taskReturn intrinsic when
+                        // the callee resolves (this handler is the fallback ordering guard,
+                        // mirroring _asyncStartCall).
+                        subtask.registerOnResolveHandler((res) => {{
+                            {debug_log_fn}('[{sync_start_call_fn}()] handling subtask result', {{ res, subtaskID: subtask.id() }});
+                            if (!subtask.isReturned()) {{ return; }}
+                            const subtaskCallMeta = subtask.getCallMetadata();
+                            if (subtaskCallMeta?.returnFn && !subtaskCallMeta.returnFnCalled) {{
+                                subtaskCallMeta.returnFnResult = subtaskCallMeta.returnFn.apply(null, [subtaskCallMeta.resultPtr]);
+                                subtaskCallMeta.returnFnCalled = true;
+                            }}
+                        }});
+
+                        let startRes = subtask.onStart({{ startFnParams: params }});
+                        startRes = startRes === undefined ? [] : Array.isArray(startRes) ? startRes : [startRes];
+                        if (startRes.length !== paramCount) {{
+                            throw new Error(`unexpected callee param count [${{ startRes.length }}] after start fn, {sync_start_call_fn} invocation expected [${{ paramCount }}]`);
+                        }}
+
+                        if (calleeComponentState.isExclusivelyLocked()) {{
+                            {debug_log_fn}('[{sync_start_call_fn}()] callee is exclusively locked, suspending...', {{
+                                taskID: preparedTask.id(),
+                                subtaskID: subtask.id(),
+                            }});
+                            await calleeComponentState.suspendTask({{
+                                task: preparedTask,
+                                readyFn: () => !calleeComponentState.isExclusivelyLocked(),
+                            }});
+                        }}
+
+                        const started = await preparedTask.enter();
+                        if (!started) {{
+                            if (preparedTask.isCancelled()) {{ return undefined; }}
+                            throw new Error('callee task failed to start during sync start call');
+                        }}
+
+                        // The prepared task was created with the *lowering's* async-ness
+                        // (sync), so enter() took the sync shortcut without acquiring the
+                        // per-slice exclusive lock the callback-driven slices below pair
+                        // with; acquire it here (the pre-wait above ensured availability).
+                        if (preparedTask.needsExclusiveLock() && !calleeComponentState.isExclusivelyLocked()) {{
+                            calleeComponentState.exclusiveLock();
+                        }}
+
+                        let jspiCallee;
+                        if (callee._cachedPromising) {{
+                            jspiCallee = callee._cachedPromising;
+                        }} else {{
+                            callee._cachedPromising = WebAssembly.promising(callee);
+                            jspiCallee = callee._cachedPromising;
+                        }}
+
+                        const callbackResult = await {with_global_current_task_meta_async_fn}({{
+                            taskID: preparedTask.id(),
+                            componentIdx: preparedTask.componentIdx(),
+                            fn: () => {{
+                                return jspiCallee.apply(null, startRes);
+                            }}
+                        }});
+
+                        if (!callbackFn) {{
+                            // Async-lifted without a callback (stackful lift): the callee ran
+                            // to completion above; task.return already ran within it.
+                            {debug_log_fn}('[{sync_start_call_fn}()] no callback, resolving w/ callee result', {{
+                                taskID: preparedTask.id(),
+                                componentIdx: preparedTask.componentIdx(),
+                            }});
+                            if (!preparedTask.isResolved()) {{ preparedTask.resolve([callbackResult]); }}
+                        }} else {{
+                            const fnName = callbackFn.fnName ?? ('<sync-start subtask ' + subtask.id() + '>');
+                            {debug_log_fn}('[{sync_start_call_fn}()] starting driver loop', {{
+                                fnName,
+                                componentIdx: preparedTask.componentIdx(),
+                                subtaskID: subtask.id(),
+                            }});
+                            await {async_driver_loop_fn}({{
+                                componentState: calleeComponentState,
+                                task: preparedTask,
+                                fnName,
+                                isAsync: true,
+                                callbackResult,
+                            }});
+                        }}
+
+                        const callMeta = subtask.getCallMetadata();
+                        const flatResult = callMeta?.returnFnResult;
+                        {debug_log_fn}('[{sync_start_call_fn}()] returning flat result', {{
+                            flatResult,
+                            subtaskID: subtask.id(),
+                            taskID: preparedTask.id(),
+                        }});
+                        return flatResult;
                     }}
-                "
+                "#
                 ));
             }
 

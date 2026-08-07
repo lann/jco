@@ -2252,12 +2252,22 @@ impl<'a> Instantiator<'a, '_> {
                 let sync_start_call_fn = self
                     .bindgen
                     .intrinsic(Intrinsic::Host(HostIntrinsic::SyncStartCall));
+                let (callback_idx, callback_fn) = callback
+                    .map(|v| (v.as_u32().to_string(), format!("callback_{}", v.as_u32())))
+                    .unwrap_or_else(|| ("null".into(), "null".into()));
+
+                // NOTE: the intrinsic blocks the (sync-lowered) caller until the
+                // async-lifted callee resolves via task.return, so it must be
+                // JSPI-wrapped.
                 uwriteln!(
                     self.src.js,
-                    "const trampoline{i} = {sync_start_call_fn}.bind(null, {});",
-                    callback
-                        .map(|v| v.as_u32().to_string())
-                        .unwrap_or_else(|| "null".into()),
+                    "const trampoline{i} = new WebAssembly.Suspending({sync_start_call_fn}.bind(
+                         null,
+                         {{
+                             callbackIdx: {callback_idx},
+                             getCallbackFn: () => {callback_fn},
+                         }},
+                     ));",
                 );
             }
 

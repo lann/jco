@@ -926,3 +926,20 @@ world stream-echo-g2g-caller {
   import stream-echo-source;
   export stream-echo-runner;
 }
+
+interface sync-lower-compute {
+  compute: async func(x: u32) -> u32;
+}
+
+interface sync-lower-runner {
+  run-compute: async func(x: u32) -> u32;
+}
+
+world sync-to-async-callee {
+  export sync-lower-compute;
+}
+
+world sync-to-async-caller {
+  import sync-lower-compute;
+  export sync-lower-runner;
+}

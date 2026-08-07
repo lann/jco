@@ -498,6 +498,10 @@ impl AsyncTaskIntrinsic {
                                 returnFnParams: [...params, subtaskCallMetadata.resultPtr],
                             }});
                             const res = subtaskCallMetadata.returnFn.apply(null, [...params, subtaskCallMetadata.resultPtr]);
+                            // For sync-lowered calls the fused [return-call] helper returns
+                            // the lowering's flat result directly; stash it for
+                            // _syncStartCall to return to the blocked caller.
+                            subtaskCallMetadata.returnFnResult = res;
                             subtaskCallMetadata.returnFnCalled = true;
                             task.resolve([]);
                             return;
