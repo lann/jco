@@ -71,19 +71,18 @@ suite('guest->guest stream transfer', () => {
         assert.strictEqual(await instance[EXPORT_NAME].runStreamTransferAll(7), 7 + 8 + 9);
     });
 
-    // Reproducer for lann/jco#11, minimized from lann/jco#40 (the
-    // polymorph-tls composed hang): the round-tripped read end goes back
-    // to the callee in argument position, so completing the stream needs
-    // *two* live tasks on the callee instance — make-stream-async (alive
-    // until its spawned writer finishes) and sum-stream (whose read is
-    // the only thing that can finish that writer). The execution-slot
-    // queue serializes task lifetimes per instance: sum-stream's task
-    // enters but is never driven, make-stream-async polls its own write
-    // end forever, and the caller polls the never-started subtask.
-    // Both transfers themselves succeed (#35/#38 hold on this path).
-    // wasmtime 47 returns 24 (`--invoke run-stream-transfer-roundtrip(7)`).
-    // Skipped until #11 lands — flip to test() with it.
-    test('async call: round-tripped stream read to close across a composition (deadlocks, lann/jco#11)', async () => {
+    // Regression test for concurrent task lifetimes (lann/jco#11),
+    // minimized from lann/jco#40 (the polymorph-tls composed hang): the
+    // round-tripped read end goes back to the callee in argument
+    // position, so completing the stream needs *two* live tasks on the
+    // callee instance — make-stream-async (alive until its spawned
+    // writer finishes) and sum-stream (whose read is the only thing
+    // that can finish that writer). Under the old one-task-per-instance
+    // serialization sum-stream's task entered but was never driven;
+    // with concurrent task lifetimes the read rendezvouses with the
+    // pending write and the stream reaches close. Matches wasmtime 47
+    // (`--invoke run-stream-transfer-roundtrip(7)` returns 24).
+    test('async call: round-tripped stream read to close across a composition', async () => {
         assert.instanceOf(instance[EXPORT_NAME].runStreamTransferRoundtrip, AsyncFunction);
         // callee writes [seed, seed+1, seed+2] then closes; callee sums them
         assert.strictEqual(await instance[EXPORT_NAME].runStreamTransferRoundtrip(7), 7 + 8 + 9);
