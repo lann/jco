@@ -851,3 +851,13 @@ world async-g2g-spillover-caller {
   export run-concat3: async func(a: string, b: string, c: u8) -> string;
   export run-add5-parked: async func(p1: u32, p2: u32, p3: u32, p4: u32, p5: u32) -> u32;
 }
+
+// wit-bindgen inter-task-wakeup (guest-internal unit stream): one export
+// spawns a detached pump task that parks on a host import; a second export
+// parks on a purely Rust-originating waker that the pump fires when the
+// import resolves (see lann/jco#13, lann/jco#11)
+world inter-task-wakeup {
+  import wakeup-tick: async func() -> u32;
+  export start-pump: async func();
+  export await-wake: async func() -> u32;
+}
