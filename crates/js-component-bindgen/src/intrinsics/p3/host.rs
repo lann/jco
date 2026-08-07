@@ -619,6 +619,7 @@ impl HostIntrinsic {
                 let with_global_current_task_meta_async_fn =
                     Intrinsic::WithGlobalCurrentTaskMetaFnAsync.name();
                 let get_global_current_task_meta_fn = Intrinsic::GetGlobalCurrentTaskMetaFn.name();
+                let set_global_current_task_meta_fn = Intrinsic::SetGlobalCurrentTaskMetaFn.name();
 
                 // The blocking start-call for a *sync-lowered* import of an
                 // *async-lifted* export (wasmtime-environ's
@@ -653,11 +654,19 @@ impl HostIntrinsic {
                         if (!preparedTask) {{ throw new Error('unexpectedly missing current (prepared) task'); }}
                         if (!preparedTask.subtaskMeta) {{ throw new Error('missing subtask meta from prepare'); }}
 
-                        const {{ subtask, calleeComponentIdx }} = preparedTask.subtaskMeta;
+                        const {{ subtask, calleeComponentIdx, callerComponentIdx }} = preparedTask.subtaskMeta;
                         if (!subtask) {{ throw new Error('missing subtask from prepare during sync start call'); }}
                         if (calleeComponentIdx !== preparedTask.componentIdx()) {{
                             throw new Error(`meta callee idx [${{calleeComponentIdx}}] != current task idx [${{preparedTask.componentIdx()}}] during sync start call`);
                         }}
+
+                        // The caller's wasm stack stays suspended across the whole blocking
+                        // call; sibling slices of the caller's component may run meanwhile
+                        // and move its current-task register. Capture the entry at call
+                        // time and restore it before the caller resumes (the same
+                        // discipline as the suspending-import wrapper).
+                        const savedCallerTaskMeta = {get_global_current_task_meta_fn}(callerComponentIdx);
+                        try {{
 
                         const callbackFn = getCallbackFn();
                         preparedTask.setCallbackFn(callbackFn, 'callback_' + callbackIdx);
@@ -763,6 +772,14 @@ impl HostIntrinsic {
                             taskID: preparedTask.id(),
                         }});
                         return flatResult;
+                        }} finally {{
+                            if (savedCallerTaskMeta) {{
+                                {set_global_current_task_meta_fn}({{
+                                    taskID: savedCallerTaskMeta.taskID,
+                                    componentIdx: callerComponentIdx,
+                                }});
+                            }}
+                        }}
                     }}
                 "#
                 ));
