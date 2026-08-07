@@ -1265,6 +1265,7 @@ impl<'a> Instantiator<'a, '_> {
                 | Trampoline::FutureDropWritable { .. }
                 | Trampoline::FutureNew { .. }
                 | Trampoline::FutureRead { .. }
+                | Trampoline::FutureTransfer
                 | Trampoline::FutureWrite { .. }
                 | Trampoline::LowerImport { .. }
                 | Trampoline::PrepareCall { .. }
@@ -1311,12 +1312,17 @@ impl<'a> Instantiator<'a, '_> {
             }
 
             Trampoline::SubtaskCancel { instance, async_ } => {
-                let task_cancel_fn = self
+                let subtask_cancel_fn = self
                     .bindgen
                     .intrinsic(Intrinsic::AsyncTask(AsyncTaskIntrinsic::SubtaskCancel));
+                let suspending_wrap_fn =
+                    self.bindgen.intrinsic(Intrinsic::SuspendingImportWrapperFn);
+                // NOTE: core wasm passes the subtask handle as the remaining argument.
+                // The intrinsic is async (a sync-lowered cancel may need to block until
+                // the subtask resolves), so it must be JSPI-wrapped.
                 uwriteln!(
                     self.src.js,
-                    "const trampoline{i} = {task_cancel_fn}.bind(null, {instance_idx}, {async_});\n",
+                    "const trampoline{i} = new WebAssembly.Suspending({suspending_wrap_fn}({instance_idx}, {subtask_cancel_fn}.bind(null, {instance_idx}, {async_})));\n",
                     instance_idx = instance.as_u32(),
                 );
             }
@@ -1376,16 +1382,18 @@ impl<'a> Instantiator<'a, '_> {
                 let waitable_set_wait_fn = self
                     .bindgen
                     .intrinsic(Intrinsic::Waitable(WaitableIntrinsic::WaitableSetWait));
+                let suspending_wrap_fn =
+                    self.bindgen.intrinsic(Intrinsic::SuspendingImportWrapperFn);
 
                 uwriteln!(
                     self.src.js,
                     r#"
-                    const trampoline{i} = new WebAssembly.Suspending({waitable_set_wait_fn}.bind(null, {{
+                    const trampoline{i} = new WebAssembly.Suspending({suspending_wrap_fn}({instance_idx}, {waitable_set_wait_fn}.bind(null, {{
                         componentIdx: {instance_idx},
                         isAsync: {async_},
                         memoryIdx: {memory_idx},
                         getMemoryFn: () => memory{memory_idx},
-                    }}));
+                    }})));
                     "#,
                 );
             }
@@ -1620,7 +1628,7 @@ impl<'a> Instantiator<'a, '_> {
 
                 uwriteln!(
                     self.src.js,
-                    r#"const trampoline{i} = new WebAssembly.Suspending({stream_read_fn}.bind(
+                    r#"const trampoline{i} = new WebAssembly.Suspending({suspending_wrap_fn}({component_instance_id}, {stream_read_fn}.bind(
                          null,
                          {{
                              componentIdx: {component_instance_id},
@@ -1632,8 +1640,10 @@ impl<'a> Instantiator<'a, '_> {
                              isAsync: {async_},
                              streamTableIdx: {stream_table_idx},
                          }}
-                     ));
+                     )));
                     "#,
+                    suspending_wrap_fn =
+                        self.bindgen.intrinsic(Intrinsic::SuspendingImportWrapperFn),
                 );
             }
 
@@ -1699,7 +1709,7 @@ impl<'a> Instantiator<'a, '_> {
                 uwriteln!(
                     self.src.js,
                     r#"
-                     const trampoline{i} = new WebAssembly.Suspending({stream_write_fn}.bind(
+                     const trampoline{i} = new WebAssembly.Suspending({suspending_wrap_fn}({component_instance_id}, {stream_write_fn}.bind(
                          null,
                          {{
                              componentIdx: {component_instance_id},
@@ -1711,8 +1721,10 @@ impl<'a> Instantiator<'a, '_> {
                              isAsync: {async_},
                              streamTableIdx: {stream_table_idx},
                          }}
-                     ));
+                     )));
                     "#,
+                    suspending_wrap_fn =
+                        self.bindgen.intrinsic(Intrinsic::SuspendingImportWrapperFn),
                 );
             }
 
@@ -1741,12 +1753,14 @@ impl<'a> Instantiator<'a, '_> {
                 uwriteln!(
                     self.src.js,
                     r#"
-                      const trampoline{i} = new WebAssembly.Suspending({stream_cancel_fn}.bind(null, {{
+                      const trampoline{i} = new WebAssembly.Suspending({suspending_wrap_fn}({component_idx}, {stream_cancel_fn}.bind(null, {{
                           streamTableIdx: {stream_table_idx},
                           isAsync: {async_},
                           componentIdx: {component_idx},
-                      }}));
+                      }})));
                     "#,
+                    suspending_wrap_fn =
+                        self.bindgen.intrinsic(Intrinsic::SuspendingImportWrapperFn),
                 );
             }
 
@@ -1939,7 +1953,7 @@ impl<'a> Instantiator<'a, '_> {
                 uwriteln!(
                     self.src.js,
                     r#"
-                      const trampoline{i} = new WebAssembly.Suspending({intrinsic_fn}.bind(
+                      const trampoline{i} = new WebAssembly.Suspending({suspending_wrap_fn}({component_idx}, {intrinsic_fn}.bind(
                           null,
                           {{
                               componentIdx: {component_idx},
@@ -1951,8 +1965,10 @@ impl<'a> Instantiator<'a, '_> {
                               futureTableIdx: {future_table_idx},
                               isAsync: {async_},
                           }},
-                      ));
+                      )));
                     "#,
+                    suspending_wrap_fn =
+                        self.bindgen.intrinsic(Intrinsic::SuspendingImportWrapperFn),
                 );
             }
 
@@ -1982,15 +1998,17 @@ impl<'a> Instantiator<'a, '_> {
                 uwriteln!(
                     self.src.js,
                     r#"
-                      const trampoline{i} = new WebAssembly.Suspending({future_cancel_op_fn}.bind(
+                      const trampoline{i} = new WebAssembly.Suspending({suspending_wrap_fn}({component_idx}, {future_cancel_op_fn}.bind(
                           null,
                           {{
                               futureTableIdx: {future_table_idx},
                               componentIdx: {component_idx},
                               isAsync: {async_},
                           }},
-                      ));
+                      )));
                     "#,
+                    suspending_wrap_fn =
+                        self.bindgen.intrinsic(Intrinsic::SuspendingImportWrapperFn),
                 );
             }
 
@@ -2012,25 +2030,24 @@ impl<'a> Instantiator<'a, '_> {
                 uwriteln!(
                     self.src.js,
                     r#"
-                      const trampoline{i} = new WebAssembly.Suspending({future_drop_op_fn}.bind(
+                      const trampoline{i} = new WebAssembly.Suspending({suspending_wrap_fn}({component_idx}, {future_drop_op_fn}.bind(
                           null,
                           {{
                               futureTableIdx: {future_table_idx},
                               componentIdx: {component_idx},
                           }},
-                      ));
-                "#
+                      )));
+                "#,
+                    suspending_wrap_fn =
+                        self.bindgen.intrinsic(Intrinsic::SuspendingImportWrapperFn),
                 );
             }
 
             Trampoline::FutureTransfer => {
-                let future_drop_writable_fn = self
+                let future_transfer_fn = self
                     .bindgen
                     .intrinsic(Intrinsic::AsyncFuture(AsyncFutureIntrinsic::FutureTransfer));
-                uwriteln!(
-                    self.src.js,
-                    "const trampoline{i} = {future_drop_writable_fn};"
-                );
+                uwriteln!(self.src.js, "const trampoline{i} = {future_transfer_fn};");
             }
 
             Trampoline::ErrorContextNew { ty, options, .. } => {
@@ -2235,12 +2252,22 @@ impl<'a> Instantiator<'a, '_> {
                 let sync_start_call_fn = self
                     .bindgen
                     .intrinsic(Intrinsic::Host(HostIntrinsic::SyncStartCall));
+                let (callback_idx, callback_fn) = callback
+                    .map(|v| (v.as_u32().to_string(), format!("callback_{}", v.as_u32())))
+                    .unwrap_or_else(|| ("null".into(), "null".into()));
+
+                // NOTE: the intrinsic blocks the (sync-lowered) caller until the
+                // async-lifted callee resolves via task.return, so it must be
+                // JSPI-wrapped.
                 uwriteln!(
                     self.src.js,
-                    "const trampoline{i} = {sync_start_call_fn}.bind(null, {});",
-                    callback
-                        .map(|v| v.as_u32().to_string())
-                        .unwrap_or_else(|| "null".into()),
+                    "const trampoline{i} = new WebAssembly.Suspending({sync_start_call_fn}.bind(
+                         null,
+                         {{
+                             callbackIdx: {callback_idx},
+                             getCallbackFn: () => {callback_fn},
+                         }},
+                     ));",
                 );
             }
 
@@ -2390,17 +2417,19 @@ impl<'a> Instantiator<'a, '_> {
 
                 // NOTE: For Trampoline::LowerImport, the trampoline index is actually already defined,
                 // but we *redefine* it to call the lower import function first.
+                let suspending_wrap_fn =
+                    self.bindgen.intrinsic(Intrinsic::SuspendingImportWrapperFn);
                 if is_async || func_ty_async {
                     uwriteln!(
                         self.src.js,
-                        "let trampoline{i} = new WebAssembly.Suspending({call});"
+                        "let trampoline{i} = new WebAssembly.Suspending({suspending_wrap_fn}({component_idx}, {call}));"
                     );
                 } else {
                     // TODO(breaking): once manually specifying async imports is removed,
                     // we can avoid the second check below.
                     uwriteln!(
                         self.src.js,
-                        "let trampoline{i} = _trampoline{i}.manuallyAsync ? new WebAssembly.Suspending({call}) : {call};"
+                        "let trampoline{i} = _trampoline{i}.manuallyAsync ? new WebAssembly.Suspending({suspending_wrap_fn}({component_idx}, {call})) : {call};"
                     );
                 }
             }
@@ -2750,14 +2779,16 @@ impl<'a> Instantiator<'a, '_> {
                 let yield_fn = self
                     .bindgen
                     .intrinsic(Intrinsic::AsyncTask(AsyncTaskIntrinsic::Yield));
+                let suspending_wrap_fn =
+                    self.bindgen.intrinsic(Intrinsic::SuspendingImportWrapperFn);
                 let component_instance_idx = instance.as_u32();
                 uwriteln!(
                     self.src.js,
                     r#"
-                      const trampoline{i} = new WebAssembly.Suspending({yield_fn}.bind(null, {{
+                      const trampoline{i} = new WebAssembly.Suspending({suspending_wrap_fn}({component_instance_idx}, {yield_fn}.bind(null, {{
                           isCancellable: {cancellable},
                           componentIdx: {component_instance_idx},
-                      }}));
+                      }})));
                     "#,
                 );
             }
@@ -5235,6 +5266,153 @@ fn flat_count_js_expr(flat_count: &Option<u8>) -> String {
         .unwrap_or_else(|| "null".into())
 }
 
+/// The Canonical ABI `join` operation over flat core types, used when
+/// computing the flat representation of variant payloads.
+fn join_flat_core_types(a: &'static str, b: &'static str) -> &'static str {
+    if a == b {
+        a
+    } else if (a == "i32" && b == "f32") || (a == "f32" && b == "i32") {
+        "i32"
+    } else {
+        "i64"
+    }
+}
+
+/// Compute the flat core types of a type per the Canonical ABI's
+/// `flatten_type` (32-bit memories), for use in lift/lower metadata.
+///
+/// Returns `None` when the type has no flat representation of at most
+/// [`MAX_FLAT_PARAMS`] core values (such types are passed via memory).
+fn flat_core_types(
+    component_types: &ComponentTypes,
+    ty: &InterfaceType,
+) -> Option<Vec<&'static str>> {
+    component_types
+        .canonical_abi(ty)
+        .flat_count(MAX_FLAT_PARAMS)?;
+    let mut flat = Vec::new();
+    push_flat_core_types(component_types, ty, &mut flat);
+    Some(flat)
+}
+
+/// Compute the join of the flat core types of a group of variant case
+/// payloads, per the Canonical ABI's `flatten_variant` (excluding the
+/// discriminant).
+fn flat_core_types_variant_payload_join<'a>(
+    component_types: &ComponentTypes,
+    cases: impl Iterator<Item = Option<&'a InterfaceType>>,
+) -> Vec<&'static str> {
+    let mut joined: Vec<&'static str> = Vec::new();
+    for maybe_ty in cases {
+        let Some(ty) = maybe_ty else { continue };
+        let mut case_flat = Vec::new();
+        push_flat_core_types(component_types, ty, &mut case_flat);
+        for (idx, flat_ty) in case_flat.into_iter().enumerate() {
+            match joined.get_mut(idx) {
+                Some(existing) => {
+                    *existing = join_flat_core_types(existing, flat_ty);
+                }
+                None => joined.push(flat_ty),
+            }
+        }
+    }
+    joined
+}
+
+fn push_flat_core_types(
+    component_types: &ComponentTypes,
+    ty: &InterfaceType,
+    flat: &mut Vec<&'static str>,
+) {
+    match ty {
+        InterfaceType::Bool
+        | InterfaceType::S8
+        | InterfaceType::U8
+        | InterfaceType::S16
+        | InterfaceType::U16
+        | InterfaceType::S32
+        | InterfaceType::U32
+        | InterfaceType::Char
+        | InterfaceType::Flags(_)
+        | InterfaceType::Enum(_)
+        | InterfaceType::Own(_)
+        | InterfaceType::Borrow(_)
+        | InterfaceType::Future(_)
+        | InterfaceType::Stream(_)
+        | InterfaceType::ErrorContext(_) => flat.push("i32"),
+
+        InterfaceType::S64 | InterfaceType::U64 => flat.push("i64"),
+
+        InterfaceType::Float32 => flat.push("f32"),
+        InterfaceType::Float64 => flat.push("f64"),
+
+        InterfaceType::String | InterfaceType::List(_) | InterfaceType::Map(_) => {
+            flat.push("i32");
+            flat.push("i32");
+        }
+
+        InterfaceType::Record(ty_idx) => {
+            for field in &component_types[*ty_idx].fields {
+                push_flat_core_types(component_types, &field.ty, flat);
+            }
+        }
+
+        InterfaceType::Tuple(ty_idx) => {
+            for ty in &component_types[*ty_idx].types {
+                push_flat_core_types(component_types, ty, flat);
+            }
+        }
+
+        InterfaceType::FixedLengthList(ty_idx) => {
+            let list_ty = &component_types[*ty_idx];
+            for _ in 0..list_ty.size {
+                push_flat_core_types(component_types, &list_ty.element, flat);
+            }
+        }
+
+        InterfaceType::Variant(ty_idx) => {
+            let variant_ty = &component_types[*ty_idx];
+            flat.push("i32");
+            flat.extend(flat_core_types_variant_payload_join(
+                component_types,
+                variant_ty.cases.iter().map(|(_, ty)| ty.as_ref()),
+            ));
+        }
+
+        InterfaceType::Option(ty_idx) => {
+            let option_ty = &component_types[*ty_idx];
+            flat.push("i32");
+            flat.extend(flat_core_types_variant_payload_join(
+                component_types,
+                [None, Some(&option_ty.ty)].into_iter(),
+            ));
+        }
+
+        InterfaceType::Result(ty_idx) => {
+            let result_ty = &component_types[*ty_idx];
+            flat.push("i32");
+            flat.extend(flat_core_types_variant_payload_join(
+                component_types,
+                [result_ty.ok.as_ref(), result_ty.err.as_ref()].into_iter(),
+            ));
+        }
+    }
+}
+
+/// Render a (possibly missing) flat core type list as a JS expression
+fn flat_core_types_js_expr(flat: &Option<Vec<&'static str>>) -> String {
+    match flat {
+        Some(flat) => format!(
+            "[{}]",
+            flat.iter()
+                .map(|t| format!("'{t}'"))
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+        None => "null".into(),
+    }
+}
+
 /// Generate the javascript lifting function for a given type
 ///
 /// This function will a function object that can be executed with the right
@@ -5370,27 +5548,38 @@ pub fn gen_flat_lift_fn_js_expr(
             let variant_size32 = variant_ty.abi.size32;
             let variant_align32 = variant_ty.abi.align32;
             let variant_payload_offset32 = variant_ty.info.payload_offset32;
+            let variant_payload_flat_types = flat_core_types_js_expr(
+                &flat_core_types(component_types, ty).map(|flat| flat[1..].to_vec()),
+            );
 
             let mut lift_metas_expr = String::from("[");
             for (name, maybe_ty) in &variant_ty.cases {
-                let (lift_fn_js, case_size32, case_align32, case_flat_count) = match maybe_ty {
-                    Some(ty) => {
-                        let cabi_info = component_types.canonical_abi(ty);
-                        (
-                            gen_flat_lift_fn_js_expr(instantiator, ty, extra_resource_map),
-                            cabi_info.size32.to_string(),
-                            cabi_info.align32.to_string(),
-                            cabi_info
-                                .flat_count(MAX_FLAT_PARAMS)
-                                .map(|v| v.to_string())
-                                .unwrap_or_else(|| "null".into()),
-                        )
-                    }
-                    None => ("null".into(), "0".into(), "0".into(), "0".into()),
-                };
+                let (lift_fn_js, case_size32, case_align32, case_flat_count, case_flat_types) =
+                    match maybe_ty {
+                        Some(ty) => {
+                            let cabi_info = component_types.canonical_abi(ty);
+                            (
+                                gen_flat_lift_fn_js_expr(instantiator, ty, extra_resource_map),
+                                cabi_info.size32.to_string(),
+                                cabi_info.align32.to_string(),
+                                cabi_info
+                                    .flat_count(MAX_FLAT_PARAMS)
+                                    .map(|v| v.to_string())
+                                    .unwrap_or_else(|| "null".into()),
+                                flat_core_types_js_expr(&flat_core_types(component_types, ty)),
+                            )
+                        }
+                        None => (
+                            "null".into(),
+                            "0".into(),
+                            "0".into(),
+                            "0".into(),
+                            "[]".into(),
+                        ),
+                    };
 
                 lift_metas_expr.push_str(&format!(
-                    "['{name}', {lift_fn_js}, {case_size32}, {case_align32}, {case_flat_count}],",
+                    "['{name}', {lift_fn_js}, {case_size32}, {case_align32}, {case_flat_count}, {case_flat_types}],",
                 ));
             }
             lift_metas_expr.push(']');
@@ -5402,6 +5591,7 @@ pub fn gen_flat_lift_fn_js_expr(
                      variantAlign32: {variant_align32},
                      variantPayloadOffset32: {variant_payload_offset32},
                      variantFlatCount: {variant_flat_count},
+                     variantPayloadFlatTypes: {variant_payload_flat_types},
                  }} )"
             )
         }
@@ -5540,11 +5730,16 @@ pub fn gen_flat_lift_fn_js_expr(
             let option_align32 = option_ty.abi.align32;
             let option_size32 = option_ty.abi.size32;
             let option_flat_count = flat_count_js_expr(&option_ty.abi.flat_count);
+            let option_payload_flat_types = flat_core_types_js_expr(
+                &flat_core_types(component_types, ty).map(|flat| flat[1..].to_vec()),
+            );
 
             let some_ty_abi = component_types.canonical_abi(&option_ty.ty);
             let some_ty_flat_count = flat_count_js_expr(&some_ty_abi.flat_count);
             let some_ty_size32 = some_ty_abi.size32;
             let some_ty_align32 = some_ty_abi.align32;
+            let some_ty_flat_types =
+                flat_core_types_js_expr(&flat_core_types(component_types, &option_ty.ty));
             let some_ty_lift_fn_js =
                 gen_flat_lift_fn_js_expr(instantiator, &option_ty.ty, extra_resource_map);
 
@@ -5552,13 +5747,14 @@ pub fn gen_flat_lift_fn_js_expr(
                 r#"
                 {f}({{
                     caseMetas: [
-                        ['none', null, 0, 0, 0 ],
-                        ['some', {some_ty_lift_fn_js}, {some_ty_size32}, {some_ty_align32}, {some_ty_flat_count} ],
+                        ['none', null, 0, 0, 0, [] ],
+                        ['some', {some_ty_lift_fn_js}, {some_ty_size32}, {some_ty_align32}, {some_ty_flat_count}, {some_ty_flat_types} ],
                     ],
                     variantSize32: {option_size32},
                     variantAlign32: {option_align32},
                     variantPayloadOffset32: {option_payload_offset32},
                     variantFlatCount: {option_flat_count},
+                    variantPayloadFlatTypes: {option_payload_flat_types},
                 }})
                 "#
             )
@@ -5572,6 +5768,9 @@ pub fn gen_flat_lift_fn_js_expr(
             let result_align32 = result_ty.abi.align32;
             let result_payload_offset32 = result_ty.info.payload_offset32;
             let result_flat_count = flat_count_js_expr(&result_ty.abi.flat_count);
+            let result_payload_flat_types = flat_core_types_js_expr(
+                &flat_core_types(component_types, ty).map(|flat| flat[1..].to_vec()),
+            );
 
             let mut cases_and_lifts_expr = String::from("[");
             if let Some(ok_ty) = result_ty.ok {
@@ -5579,13 +5778,15 @@ pub fn gen_flat_lift_fn_js_expr(
                 let ok_ty_size32 = ok_ty_abi.size32;
                 let ok_ty_align32 = ok_ty_abi.align32;
                 let ok_flat_count = flat_count_js_expr(&ok_ty_abi.flat_count);
+                let ok_ty_flat_types =
+                    flat_core_types_js_expr(&flat_core_types(component_types, &ok_ty));
                 let ok_ty_lift_fn =
                     gen_flat_lift_fn_js_expr(instantiator, &ok_ty, extra_resource_map);
                 cases_and_lifts_expr.push_str(&format!(
-                    "['ok', {ok_ty_lift_fn}, {ok_ty_size32}, {ok_ty_align32}, {ok_flat_count}],",
+                    "['ok', {ok_ty_lift_fn}, {ok_ty_size32}, {ok_ty_align32}, {ok_flat_count}, {ok_ty_flat_types}],",
                 ))
             } else {
-                cases_and_lifts_expr.push_str("['ok', null, 0, 0, 0],");
+                cases_and_lifts_expr.push_str("['ok', null, 0, 0, 0, []],");
             }
 
             if let Some(err_ty) = &result_ty.err {
@@ -5593,13 +5794,15 @@ pub fn gen_flat_lift_fn_js_expr(
                 let err_ty_size32 = err_ty_abi.size32;
                 let err_ty_align32 = err_ty_abi.align32;
                 let err_ty_flat_count = flat_count_js_expr(&err_ty_abi.flat_count);
+                let err_ty_flat_types =
+                    flat_core_types_js_expr(&flat_core_types(component_types, err_ty));
                 let err_ty_lift_fn =
                     gen_flat_lift_fn_js_expr(instantiator, err_ty, extra_resource_map);
                 cases_and_lifts_expr.push_str(&format!(
-                    "['err', {err_ty_lift_fn}, {err_ty_size32}, {err_ty_align32}, {err_ty_flat_count}],",
+                    "['err', {err_ty_lift_fn}, {err_ty_size32}, {err_ty_align32}, {err_ty_flat_count}, {err_ty_flat_types}],",
                 ))
             } else {
-                cases_and_lifts_expr.push_str("['err', null, 0, 0, 0],");
+                cases_and_lifts_expr.push_str("['err', null, 0, 0, 0, []],");
             }
             cases_and_lifts_expr.push(']');
 
@@ -5611,6 +5814,7 @@ pub fn gen_flat_lift_fn_js_expr(
                       variantAlign32: {result_align32},
                       variantPayloadOffset32: {result_payload_offset32},
                       variantFlatCount: {result_flat_count},
+                      variantPayloadFlatTypes: {result_payload_flat_types},
                   }})
                 "#
             )

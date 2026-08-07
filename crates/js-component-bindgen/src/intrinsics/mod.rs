@@ -159,6 +159,10 @@ pub enum Intrinsic {
 
     /// Clear the global task meta
     ClearGlobalCurrentTaskMetaFn,
+
+    /// Wrap the JS payload of a `WebAssembly.Suspending` import so the
+    /// importing component's current-task register survives suspension
+    SuspendingImportWrapperFn,
 }
 
 impl Intrinsic {
@@ -757,6 +761,11 @@ impl Intrinsic {
                 let rep_table_class = Intrinsic::RepTableClass.name();
                 output.push_str(&format!(r#"
                     class {rep_table_class} {{
+                        // Sentinel marking a freed slot; the freelist link for a freed slot
+                        // lives in the odd cell. This keeps get()/contains()/remove() on freed
+                        // reps well-defined (previously they returned/corrupted freelist links).
+                        static FREE = Symbol('{rep_table_class}.free');
+
                         #data = [0, null];
                         #size = 0;
                         #target;
@@ -778,8 +787,11 @@ impl Intrinsic {
                                 this.#size += 1;
                                 return rep;
                             }}
-                            this.#data[0] = this.#data[freeIdx << 1];
                             const placementIdx = freeIdx << 1;
+                            if (this.#data[placementIdx] !== {rep_table_class}.FREE) {{
+                                throw new Error('corrupt rep table freelist: head does not point at a freed slot');
+                            }}
+                            this.#data[0] = this.#data[placementIdx + 1];
                             this.#data[placementIdx] = val;
                             this.#data[placementIdx + 1] = null;
                             {debug_log_fn}('[{rep_table_class}#insert()] inserted', {{ val, target: this.target, rep: freeIdx }});
@@ -793,6 +805,7 @@ impl Intrinsic {
 
                             const baseIdx = rep << 1;
                             const val = this.#data[baseIdx];
+                            if (val === {rep_table_class}.FREE) {{ return undefined; }}
                             return val;
                         }}
 
@@ -801,7 +814,8 @@ impl Intrinsic {
                             if (rep === 0) {{ throw new Error('invalid resource rep during contains, (cannot be 0)'); }}
 
                             const baseIdx = rep << 1;
-                            return !!this.#data[baseIdx];
+                            const val = this.#data[baseIdx];
+                            return val !== {rep_table_class}.FREE && !!val;
                         }}
 
                         remove(rep) {{
@@ -810,9 +824,16 @@ impl Intrinsic {
                             if (this.#data.length === 2) {{ throw new Error('invalid'); }}
 
                             const baseIdx = rep << 1;
+                            if (baseIdx >= this.#data.length) {{
+                                throw new Error(`invalid rep [${{rep}}] during remove, out of range`);
+                            }}
                             const val = this.#data[baseIdx];
+                            if (val === {rep_table_class}.FREE) {{
+                                throw new Error(`double removal of rep [${{rep}}] (already freed)`);
+                            }}
 
-                            this.#data[baseIdx] = this.#data[0];
+                            this.#data[baseIdx] = {rep_table_class}.FREE;
+                            this.#data[baseIdx + 1] = this.#data[0];
                             this.#data[0] = rep;
                             this.#size -= 1;
 
@@ -1048,6 +1069,33 @@ impl Intrinsic {
                 ));
             }
 
+            // Under JSPI a wasm stack suspends inside a task's callback
+            // slice; other tasks then set the per-component current-task
+            // register. Restoring the captured entry when the awaited
+            // import settles is the last JS to run before the suspended
+            // stack resumes, so the resumed continuation's context.get /
+            // context.set (and task-exit bookkeeping) address the task
+            // that is actually executing.
+            Self::SuspendingImportWrapperFn => {
+                let suspending_import_wrapper_fn = Self::SuspendingImportWrapperFn.name();
+                let global_current_task_meta_obj = Self::GlobalCurrentTaskMeta.name();
+
+                output.push_str(&format!(
+                    r#"
+                      function {suspending_import_wrapper_fn}(componentIdx, fn) {{
+                          return async function (...args) {{
+                              const saved = {global_current_task_meta_obj}[componentIdx] ?? null;
+                              try {{
+                                  return await fn.apply(null, args);
+                              }} finally {{
+                                  {global_current_task_meta_obj}[componentIdx] = saved;
+                              }}
+                          }};
+                      }}
+                    "#,
+                ));
+            }
+
             // TODO(feat): customizable stream classes
             Intrinsic::PlatformReadableStreamClass => {
                 let name = self.name();
@@ -1107,7 +1155,7 @@ pub struct RenderIntrinsicsArgs<'a> {
 }
 
 /// Intrinsics that should be rendered as early as possible
-const EARLY_INTRINSICS: [Intrinsic; 43] = [
+const EARLY_INTRINSICS: [Intrinsic; 44] = [
     Intrinsic::PromiseWithResolversPonyfill,
     Intrinsic::SymbolDispose,
     Intrinsic::SymbolAsyncIterator,
@@ -1121,6 +1169,7 @@ const EARLY_INTRINSICS: [Intrinsic; 43] = [
     Intrinsic::WithGlobalCurrentTaskMetaFn,
     Intrinsic::WithGlobalCurrentTaskMetaFnAsync,
     Intrinsic::ClearGlobalCurrentTaskMetaFn,
+    Intrinsic::SuspendingImportWrapperFn,
     Intrinsic::LookupMemoriesForComponent,
     Intrinsic::RegisterGlobalMemoryForComponent,
     Intrinsic::RepTableClass,
@@ -1435,6 +1484,29 @@ pub fn render_intrinsics(args: RenderIntrinsicsArgs) -> Source {
         args.intrinsics.insert(Intrinsic::AsyncStream(
             AsyncStreamIntrinsic::PendingValueQueueClass,
         ));
+    }
+
+    if args.intrinsics.contains(&Intrinsic::AsyncStream(
+        AsyncStreamIntrinsic::GenReadFnFromLowerableStream,
+    )) {
+        args.intrinsics.extend([
+            &Intrinsic::AsyncStream(AsyncStreamIntrinsic::IsStreamLowerableObject),
+            &Intrinsic::SymbolAsyncIterator,
+            &Intrinsic::SymbolIterator,
+            &Intrinsic::SymbolDispose,
+            &Intrinsic::PlatformReadableStreamClass,
+        ]);
+    }
+
+    if args.intrinsics.contains(&Intrinsic::AsyncStream(
+        AsyncStreamIntrinsic::IsStreamLowerableObject,
+    )) {
+        args.intrinsics.extend([
+            &Intrinsic::AsyncStream(AsyncStreamIntrinsic::ExternalStreamClass),
+            &Intrinsic::SymbolAsyncIterator,
+            &Intrinsic::SymbolIterator,
+            &Intrinsic::PlatformReadableStreamClass,
+        ]);
     }
 
     if args
@@ -1789,6 +1861,7 @@ impl Intrinsic {
             Self::WithGlobalCurrentTaskMetaFn => "_withGlobalCurrentTaskMeta",
             Self::WithGlobalCurrentTaskMetaFnAsync => "_withGlobalCurrentTaskMetaAsync",
             Self::ClearGlobalCurrentTaskMetaFn => "_clearCurrentTask",
+            Self::SuspendingImportWrapperFn => "_suspendingImport",
 
             // Iteratively saved metadata
             Intrinsic::GlobalComponentMemoryMap => "GLOBAL_COMPONENT_MEMORY_MAP",
