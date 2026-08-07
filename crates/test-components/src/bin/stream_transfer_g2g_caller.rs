@@ -38,6 +38,17 @@ impl Guest for Component {
         let vals: Vec<u8> = rx.collect().await;
         vals.into_iter().map(u32::from).sum()
     }
+
+    async fn run_stream_transfer_roundtrip(seed: u8) -> u32 {
+        // The transform-pair wiring, minimized (lann/jco#40 -> #11): the
+        // callee creates the stream and keeps the write side; the read end
+        // crosses into this component on the return path and is passed
+        // straight back in argument position for the callee to read to
+        // close. Completing the stream therefore needs two live tasks on
+        // the callee instance at once.
+        let rx = stream_transfer_source::make_stream_async(seed).await;
+        stream_transfer_source::sum_stream(rx).await
+    }
 }
 
 // Stub only to ensure this works as a binary

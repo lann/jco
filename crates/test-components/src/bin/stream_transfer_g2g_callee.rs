@@ -48,6 +48,15 @@ impl Guest for Component {
         });
         rx
     }
+
+    // Reads a stream to close. With a make-stream-async stream, this
+    // component holds the write side, so the argument is a read end that
+    // has round-tripped: out to the caller in return position, back in
+    // argument position.
+    async fn sum_stream(data: StreamReader<u8>) -> u32 {
+        let vals: Vec<u8> = data.collect().await;
+        vals.into_iter().map(u32::from).sum()
+    }
 }
 
 // Stub only to ensure this works as a binary

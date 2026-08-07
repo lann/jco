@@ -770,6 +770,11 @@ interface stream-transfer-source {
   // async-lifted variant: the exporting task stays alive (callback protocol)
   // until its spawned writer completes, so the stream reaches close
   make-stream-async: async func(seed: u8) -> stream<u8>;
+  // reads a stream to close, summing the values; with a stream from
+  // make-stream-async this component holds the write side, so the read
+  // end passed here has round-tripped (out in return position, back in
+  // argument position)
+  sum-stream: async func(data: stream<u8>) -> u32;
 }
 
 interface stream-transfer-runner {
@@ -777,6 +782,9 @@ interface stream-transfer-runner {
   // reads the composed stream to close (callee task must outlive its
   // return to drive the spawned writer -- async-lifted callee export)
   run-stream-transfer-all: async func(seed: u8) -> u32;
+  // round trip: the callee-created read end crosses to the caller and is
+  // passed straight back for the callee to read to close
+  run-stream-transfer-roundtrip: async func(seed: u8) -> u32;
 }
 
 world stream-transfer-g2g-callee {
