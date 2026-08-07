@@ -1265,6 +1265,7 @@ impl<'a> Instantiator<'a, '_> {
                 | Trampoline::FutureDropWritable { .. }
                 | Trampoline::FutureNew { .. }
                 | Trampoline::FutureRead { .. }
+                | Trampoline::FutureTransfer
                 | Trampoline::FutureWrite { .. }
                 | Trampoline::LowerImport { .. }
                 | Trampoline::PrepareCall { .. }
@@ -2024,13 +2025,10 @@ impl<'a> Instantiator<'a, '_> {
             }
 
             Trampoline::FutureTransfer => {
-                let future_drop_writable_fn = self
+                let future_transfer_fn = self
                     .bindgen
                     .intrinsic(Intrinsic::AsyncFuture(AsyncFutureIntrinsic::FutureTransfer));
-                uwriteln!(
-                    self.src.js,
-                    "const trampoline{i} = {future_drop_writable_fn};"
-                );
+                uwriteln!(self.src.js, "const trampoline{i} = {future_transfer_fn};");
             }
 
             Trampoline::ErrorContextNew { ty, options, .. } => {
