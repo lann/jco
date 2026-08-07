@@ -803,3 +803,27 @@ interface async-export-future-result-api {
 world async-export-future-result {
   export async-export-future-result-api;
 }
+
+// Scalar/float payloads in variant returns from async exports, lifted via
+// direct-param task.return (see lann/jco#16)
+interface result-scalars-api {
+  get-u64-ok: async func(v: u64) -> result<u64, string>;
+  get-u64-err: async func(msg: string) -> result<u64, string>;
+  get-s64-ok: async func(v: s64) -> result<s64, string>;
+  get-f64-ok: async func(v: f64) -> result<f64, string>;
+  get-f64-only: async func(v: f64) -> result<f64, f64>;
+  get-f32-only: async func(v: f32) -> result<f32, f32>;
+  get-option-u64: async func(v: u64) -> option<u64>;
+  get-option-f64: async func(v: f64) -> option<f64>;
+  get-option-f32: async func(v: f32) -> option<f32>;
+  get-record-u64: async func(v: u64) -> result<nested-u64, string>;
+
+  record nested-u64 {
+    val: u64,
+    tag: u32,
+  }
+}
+
+world async-result-scalars {
+  export result-scalars-api;
+}
