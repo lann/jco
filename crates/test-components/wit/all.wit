@@ -929,6 +929,9 @@ world stream-echo-g2g-caller {
 
 interface sync-lower-compute {
   compute: async func(x: u32) -> u32;
+  // results wider than one flat value: the sync lowering spills them
+  // through a trailing return pointer
+  compute-list: async func(x: u32) -> list<u32>;
 }
 
 interface sync-lower-runner {

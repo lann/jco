@@ -37,7 +37,10 @@ suite('guest->guest sync-lowered call to async-lifted callee', () => {
         });
         try {
             assert.instanceOf(instance[EXPORT_NAME].runCompute, AsyncFunction);
-            assert.strictEqual(await instance[EXPORT_NAME].runCompute(39), 42);
+            // compute(13) -> 16 (direct flat result), then
+            // compute-list(16) -> [16, 17, 18] (spilled via return pointer),
+            // summed by the caller
+            assert.strictEqual(await instance[EXPORT_NAME].runCompute(13), 16 + 17 + 18);
         } finally {
             await cleanup();
         }

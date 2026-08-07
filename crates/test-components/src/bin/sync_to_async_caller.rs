@@ -6,7 +6,10 @@ mod bindings {
         // binding blocks until the callee resolves, and the fused adapter
         // routes the call through PrepareCall + SyncStartCall
         // (see lann/jco#45).
-        async: ["-import:jco:test-components/sync-lower-compute#compute"],
+        async: [
+            "-import:jco:test-components/sync-lower-compute#compute",
+            "-import:jco:test-components/sync-lower-compute#compute-list",
+        ],
     });
     export!(Component);
 }
@@ -19,8 +22,13 @@ struct Component;
 impl Guest for Component {
     async fn run_compute(x: u32) -> u32 {
         // Blocking (sync-lowered) call to the composed callee's async-lifted
-        // export.
-        sync_lower_compute::compute(x)
+        // export: single flat result, returned directly by the fused
+        // [sync-start] built-in.
+        let direct = sync_lower_compute::compute(x);
+        // Spilled results: the list comes back through the sync lowering's
+        // trailing return pointer.
+        let list = sync_lower_compute::compute_list(direct);
+        list.into_iter().sum()
     }
 }
 

@@ -17,6 +17,12 @@ impl Guest for Component {
     async fn compute(x: u32) -> u32 {
         x + 3
     }
+
+    // List results exceed one flat value, so the caller's sync lowering
+    // receives them through a trailing return pointer.
+    async fn compute_list(x: u32) -> Vec<u32> {
+        vec![x, x + 1, x + 2]
+    }
 }
 
 // Stub only to ensure this works as a binary
