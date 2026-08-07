@@ -83,7 +83,7 @@ suite('guest->guest stream transfer', () => {
     // Both transfers themselves succeed (#35/#38 hold on this path).
     // wasmtime 47 returns 24 (`--invoke run-stream-transfer-roundtrip(7)`).
     // Skipped until #11 lands — flip to test() with it.
-    test.skip('async call: round-tripped stream read to close across a composition (deadlocks, lann/jco#11)', async () => {
+    test('async call: round-tripped stream read to close across a composition (deadlocks, lann/jco#11)', async () => {
         assert.instanceOf(instance[EXPORT_NAME].runStreamTransferRoundtrip, AsyncFunction);
         // callee writes [seed, seed+1, seed+2] then closes; callee sums them
         assert.strictEqual(await instance[EXPORT_NAME].runStreamTransferRoundtrip(7), 7 + 8 + 9);
