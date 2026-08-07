@@ -1129,7 +1129,13 @@ impl AsyncTaskIntrinsic {
                                 return this.#entered;
                             }}
 
-                            await cstate.nextTaskExecutionSlot({{ task: this }});
+                            // NOTE: concurrent task lifetimes within one component instance are
+                            // permitted by the Component Model: entry is governed by the
+                            // backpressure and exclusive-lock checks below (the lock is held per
+                            // execution slice, not for the task's lifetime). Serializing entire
+                            // task lifetimes here (the former "execution slot" queue) deadlocks
+                            // pipelines where a parked long-lived task's progress depends on a
+                            // later entry into the same component (see lann/jco#40, lann/jco#11).
 
                             // If a task is synchronous then we can avoid component-relevant
                             // tracking and immediately enter.
