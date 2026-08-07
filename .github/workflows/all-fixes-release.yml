@@ -1,0 +1,140 @@
+name: all-fixes-release
+
+# Builds installable package tarballs from the all-fixes integration branch
+# and publishes them as a prerelease GitHub release on every push (merge)
+# to that branch.
+#
+# NOTE: this workflow lives on the `ci/all-fixes-release` branch, which is
+# merged into `all-fixes` alongside the fix branches whenever all-fixes is
+# (re)built -- push-triggered workflows only run if the workflow file is
+# present on the pushed ref.
+
+on:
+  push:
+    branches:
+      - all-fixes
+  workflow_dispatch: {}
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "latest"
+
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: 11
+
+      - name: Install Rust
+        run: rustup update stable --no-self-update
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: jco-${{ hashFiles('Cargo.lock') }}
+
+      - name: Enable sccache
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+
+      - name: Setup sccache
+        run: |
+          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+
+      - name: Cache node modules
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          key: node-modules-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
+          path: |
+            node_modules
+
+      - name: Install node modules
+        run: pnpm install
+
+      - name: Build jco
+        run: pnpm --filter '@bytecodealliance/jco' run build
+
+      - name: Build jco-transpile
+        run: pnpm --filter '@bytecodealliance/jco-transpile' run build
+
+      - name: Build preview2-shim
+        run: pnpm --filter '@bytecodealliance/preview2-shim' run build
+
+      - name: Pack tarballs with sha-suffixed versions
+        run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          SUFFIX="g${SHORT_SHA}"
+          mkdir -p dist-tarballs
+
+          for pkg in jco-transpile jco preview2-shim; do
+            dir="packages/${pkg}"
+            base="$(node -p "require('./${dir}/package.json').version")"
+            (cd "$dir" && npm pkg set version="${base}-${SUFFIX}")
+            echo "packed ${pkg}: ${base}-${SUFFIX}"
+          done
+
+          for pkg in jco-transpile jco preview2-shim; do
+            (cd "packages/${pkg}" && pnpm pack)
+            mv packages/"${pkg}"/*.tgz dist-tarballs/
+          done
+
+          ls -la dist-tarballs/
+
+      - name: Generate release notes
+        run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          {
+            echo "Integration build of the \`all-fixes\` branch @ ${GITHUB_SHA}."
+            echo
+            echo "## Composition (merges on top of \`main\`)"
+            echo
+            git log --merges --first-parent --format='- %h %s' origin/main..HEAD
+            echo
+            echo "## Install"
+            echo
+            echo '```sh'
+            for f in dist-tarballs/*.tgz; do
+              echo "npm install <url-or-path>/$(basename "$f")"
+            done
+            echo '```'
+            echo
+            echo "The \`@bytecodealliance/jco\` CLI tarball depends on registry" \
+                 "versions of \`jco-transpile\`/\`preview2-shim\`; to run the CLI" \
+                 "against the all-fixes builds, add npm \`overrides\` pointing at" \
+                 "the sha-suffixed tarballs."
+          } > release-notes.md
+          cat release-notes.md
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          TAG="all-fixes-${SHORT_SHA}"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist-tarballs/*.tgz --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" dist-tarballs/*.tgz \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --prerelease \
+              --title "all-fixes @ ${SHORT_SHA}" \
+              --notes-file release-notes.md
+          fi
