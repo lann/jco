@@ -703,17 +703,6 @@ impl HostIntrinsic {
                             throw new Error(`unexpected callee param count [${{ startRes.length }}] after start fn, {sync_start_call_fn} invocation expected [${{ paramCount }}]`);
                         }}
 
-                        if (calleeComponentState.isExclusivelyLocked()) {{
-                            {debug_log_fn}('[{sync_start_call_fn}()] callee is exclusively locked, suspending...', {{
-                                taskID: preparedTask.id(),
-                                subtaskID: subtask.id(),
-                            }});
-                            await calleeComponentState.suspendTask({{
-                                task: preparedTask,
-                                readyFn: () => !calleeComponentState.isExclusivelyLocked(),
-                            }});
-                        }}
-
                         const started = await preparedTask.enter();
                         if (!started) {{
                             if (preparedTask.isCancelled()) {{ return undefined; }}
@@ -723,9 +712,10 @@ impl HostIntrinsic {
                         // The prepared task was created with the *lowering's* async-ness
                         // (sync), so enter() took the sync shortcut without acquiring the
                         // per-slice exclusive lock the callback-driven slices below pair
-                        // with; acquire it here (the pre-wait above ensured availability).
-                        if (preparedTask.needsExclusiveLock() && !calleeComponentState.isExclusivelyLocked()) {{
-                            calleeComponentState.exclusiveLock();
+                        // with; acquire it here (FIFO-queued when another slice of the
+                        // callee is mid-flight, see lann/jco#30).
+                        if (preparedTask.needsExclusiveLock()) {{
+                            await calleeComponentState.acquireExclusiveLock(preparedTask.id());
                         }}
 
                         let jspiCallee;
@@ -736,13 +726,23 @@ impl HostIntrinsic {
                             jspiCallee = callee._cachedPromising;
                         }}
 
-                        const callbackResult = await {with_global_current_task_meta_async_fn}({{
-                            taskID: preparedTask.id(),
-                            componentIdx: preparedTask.componentIdx(),
-                            fn: () => {{
-                                return jspiCallee.apply(null, startRes);
+                        let callbackResult;
+                        try {{
+                            callbackResult = await {with_global_current_task_meta_async_fn}({{
+                                taskID: preparedTask.id(),
+                                componentIdx: preparedTask.componentIdx(),
+                                fn: () => {{
+                                    return jspiCallee.apply(null, startRes);
+                                }}
+                            }});
+                        }} catch (err) {{
+                            // A trapped callee propagates to the (sync) caller; release
+                            // the per-slice hold the driver loop will never pair.
+                            if (preparedTask.needsExclusiveLock()) {{
+                                calleeComponentState.exclusiveRelease(preparedTask.id());
                             }}
-                        }});
+                            throw err;
+                        }}
 
                         if (!callbackFn) {{
                             // Async-lifted without a callback (stackful lift): the callee ran
