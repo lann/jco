@@ -494,19 +494,9 @@ impl HostIntrinsic {
                                 throw new Error(`unexpected callee param count [${{ startRes.length }}] after start fn, {async_start_call_fn} invocation expected [${{ paramCount }}]`);
                             }}
 
-                            if (calleeComponentState.isExclusivelyLocked()) {{
-                                {debug_log_fn}('[{async_start_call_fn}()] during continuation callee is exclusively locked, suspending...', {{
-                                    taskID: preparedTask.id(),
-                                    subtaskID: subtask.id(),
-                                    callerComponentIdx,
-                                    calleeComponentIdx,
-                                }});
-                                await calleeComponentState.suspendTask({{
-                                    task: preparedTask,
-                                    readyFn: () => !calleeComponentState.isExclusivelyLocked(),
-                                }});
-                            }}
-
+                            // NOTE: enter() below queues (FIFO) for the per-slice
+                            // exclusive lock when another slice of the callee component
+                            // is mid-flight; no pre-wait needed.
                             const started = await preparedTask.enter();
                             if (!started) {{
                                 {debug_log_fn}('[{async_start_call_fn}()] task failed early', {{
@@ -542,6 +532,12 @@ impl HostIntrinsic {
                                 // subtask.getParentTask().reject(err);
 
                                 subtask.getParentTask().setErrored(err);
+
+                                // Release the enter()-acquired per-slice hold: the driver
+                                // loop that would normally pair it never starts.
+                                if (preparedTask.needsExclusiveLock()) {{
+                                    calleeComponentState.exclusiveRelease(preparedTask.id());
+                                }}
 
                                 return;
                             }}
